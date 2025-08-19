@@ -9,7 +9,6 @@ type Props = {
 }
 
 export default function Controls({ state, onDrawStock, onDrawDiscard, onPublish, onDiscard }: Props) {
-  const canDraw = true
   return (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
       <button onClick={onDrawStock}>Draw stock ({state.stock.length})</button>

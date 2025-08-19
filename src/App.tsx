@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { GameState } from './types'
 import { createGame, currentPlayer, discard as discardAction, drawDiscard, drawStock, publishMeld, replaceJokerInMeld } from './state'
 import { isValidMeld } from './rules'
@@ -11,7 +11,6 @@ import BuyModal from './components/BuyModal'
 export default function App() {
   const [state, setState] = useState<GameState | null>(null)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [selectedMeldId, setSelectedMeldId] = useState<string | null>(null)
 
   const me = state ? currentPlayer(state) : null
   const topDiscard = state && state.discard.length > 0 ? state.discard[state.discard.length - 1] : null
@@ -72,7 +71,6 @@ export default function App() {
       meld.cards = combined
     })
     setSelectedIds([])
-    setSelectedMeldId(null)
   }
 
   function handleJokerClick(meldId: string) {

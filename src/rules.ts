@@ -1,4 +1,4 @@
-import { Card, GameState, Meld, Rank, Suit } from './types'
+import { Card, Meld, Rank, Suit } from './types'
 
 const SUITS: Suit[] = ['♠', '♥', '♦', '♣']
 const RANKS: Rank[] = ['A','2','3','4','5','6','7','8','9','10','J','Q','K']
