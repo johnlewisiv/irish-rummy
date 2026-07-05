@@ -12,6 +12,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [connected, setConnected] = useState(socket.connected);
   const toastTimer = useRef(null);
+  const roomStateRef = useRef(null);
 
   const showError = useCallback((msg) => {
     setToast(msg);
@@ -23,8 +24,20 @@ export default function App() {
   const act = useCallback((event, payload) =>
     call(event, payload).catch((e) => showError(e.message)), [showError]);
 
+  const refreshRooms = useCallback(() => {
+    call('rooms:list').then((r) => setRoomsList(r.rooms || [])).catch(() => {});
+  }, []);
+
+  useEffect(() => { roomStateRef.current = roomState; }, [roomState]);
+
   useEffect(() => {
     const onState = (s) => setRoomState(s);
+    const onClosed = ({ code, name }) => {
+      setRoomState(null);
+      setChat([]);
+      showError(`${name || code || 'That game'} was closed.`);
+      refreshRooms();
+    };
     const onChat = (m) => setChat((c) => [...c.slice(-100), m]);
     const onHistory = (msgs) => setChat(msgs);
     const onConnect = () => {
@@ -32,12 +45,21 @@ export default function App() {
       // (Re)introduce ourselves — the server reseats us if we were mid-game.
       if (getSavedName()) {
         call('hello', { token: getToken(), name: getSavedName() })
-          .then(() => setSignedIn(true))
+          .then((res) => {
+            setSignedIn(true);
+            if (roomStateRef.current && !res.rejoined) {
+              setRoomState(null);
+              setChat([]);
+              showError('That game is no longer on the server. Start a fresh room.');
+              refreshRooms();
+            }
+          })
           .catch(() => {});
       }
     };
     const onDisconnect = () => setConnected(false);
     socket.on('room:state', onState);
+    socket.on('room:closed', onClosed);
     socket.on('chat:message', onChat);
     socket.on('chat:history', onHistory);
     socket.on('connect', onConnect);
@@ -45,16 +67,13 @@ export default function App() {
     if (socket.connected) onConnect();
     return () => {
       socket.off('room:state', onState);
+      socket.off('room:closed', onClosed);
       socket.off('chat:message', onChat);
       socket.off('chat:history', onHistory);
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
     };
-  }, []);
-
-  const refreshRooms = useCallback(() => {
-    call('rooms:list').then((r) => setRoomsList(r.rooms || [])).catch(() => {});
-  }, []);
+  }, [showError, refreshRooms]);
 
   useEffect(() => {
     if (signedIn && !roomState) {
@@ -113,6 +132,7 @@ export default function App() {
           rooms={roomsList}
           onCreate={(roomName) => act('rooms:create', { roomName })}
           onJoin={(code, spectate) => act('rooms:join', { code, spectate })}
+          onCloseRoom={(code) => act('room:close', { code }).then(refreshRooms)}
           onRefresh={refreshRooms}
           onQuickPlay={quickPlay}
         />
@@ -155,7 +175,7 @@ function NameScreen({ name, setName, onSubmit }) {
 }
 
 /* ---------------- lobby ---------------- */
-function LobbyScreen({ name, rooms, onCreate, onJoin, onRefresh, onQuickPlay }) {
+function LobbyScreen({ name, rooms, onCreate, onJoin, onCloseRoom, onRefresh, onQuickPlay }) {
   const [roomName, setRoomName] = useState('');
   const [joinCode, setJoinCode] = useState('');
   return (
@@ -226,10 +246,20 @@ function LobbyScreen({ name, rooms, onCreate, onJoin, onRefresh, onQuickPlay }) 
                   </div>
                 </div>
                 <div className="flex gap-2 shrink-0">
-                  {!r.started && (
-                    <button onClick={() => onJoin(r.code, false)} className="bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-bold rounded px-3 py-1">Join</button>
+                  {(!r.started || r.canRejoin) && (
+                    <button onClick={() => onJoin(r.code, false)} className="bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-bold rounded px-3 py-1">
+                      {r.started ? 'Rejoin' : 'Join'}
+                    </button>
                   )}
                   <button onClick={() => onJoin(r.code, true)} className="bg-emerald-800 hover:bg-emerald-700 text-sm rounded px-3 py-1">Watch</button>
+                  {r.canClose && (
+                    <button
+                      onClick={() => window.confirm(`Close ${r.name}? Everyone will be returned to the lobby.`) && onCloseRoom(r.code)}
+                      className="bg-red-700 hover:bg-red-600 text-sm rounded px-3 py-1"
+                    >
+                      Close
+                    </button>
+                  )}
                 </div>
               </li>
             ))}

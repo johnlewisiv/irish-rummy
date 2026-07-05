@@ -26,6 +26,17 @@ const io = new Server(server, {
 const rooms = new RoomManager();
 setInterval(() => rooms.sweep(), 10 * 60 * 1000);
 
+function closeRoom(room) {
+  io.to(room.code).emit('room:closed', { code: room.code, name: room.name });
+  for (const s of io.of('/').sockets.values()) {
+    if (s.data.roomCode !== room.code) continue;
+    s.leave(room.code);
+    s.data.roomCode = null;
+    s.data.role = null;
+  }
+  rooms.destroyRoom(room.code);
+}
+
 // ------------------------------------------------------------------
 // Static client (built by `npm run build` in ../client)
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
@@ -95,7 +106,7 @@ io.on('connection', (socket) => {
     return {};
   }));
 
-  socket.on('rooms:list', guard(() => ({ rooms: rooms.list() })));
+  socket.on('rooms:list', guard(() => ({ rooms: rooms.list(socket.data.token) })));
 
   socket.on('rooms:create', guard(({ roomName }) => {
     if (!socket.data.token) throw new Err('Sign in first.');
@@ -112,7 +123,11 @@ io.on('connection', (socket) => {
     const room = rooms.get(code);
     if (!room) throw new Err('Room not found.');
     const alreadySeated = room.seats.some((s) => s.token === socket.data.token);
-    if (spectate || (room.game && !alreadySeated)) {
+    if (alreadySeated && !spectate) {
+      socket.data.role = 'player';
+      const p = room.game?.getPlayer(socket.data.token);
+      if (p) p.connected = true;
+    } else if (spectate || room.game) {
       if (!room.spectators.includes(socket.data.token)) room.spectators.push(socket.data.token);
       socket.data.role = 'spectator';
     } else {
@@ -125,6 +140,14 @@ io.on('connection', (socket) => {
     socket.emit('chat:history', room.chat.slice(-50));
     broadcastRoom(room);
     return { code: room.code, role: socket.data.role };
+  }));
+
+  socket.on('room:close', guard(({ code }) => {
+    const room = code ? rooms.get(code) : currentRoom();
+    if (!room) return {};
+    if (room.hostToken !== socket.data.token) throw new Err('Only the host can close this game.');
+    closeRoom(room);
+    return { closed: true };
   }));
 
   socket.on('rooms:leave', guard(() => {

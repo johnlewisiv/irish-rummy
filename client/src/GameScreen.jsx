@@ -13,7 +13,10 @@ const BuyToken = ({ className = 'w-5 h-5' }) => (
 
 const SUIT_ORDER = { S: 0, H: 1, D: 2, C: 3 };
 const RANK_VAL = { A: 14, K: 13, Q: 12, J: 11 };
+const RANK_FROM_VALUE = { 1: 'A', 11: 'J', 12: 'Q', 13: 'K', 14: 'A' };
+const SUIT_GLYPH = { S: '♠', H: '♥', D: '♦', C: '♣' };
 const rv = (c) => (c.joker ? 99 : RANK_VAL[c.rank] || parseInt(c.rank, 10));
+const rankFromValue = (v) => RANK_FROM_VALUE[v] || String(v);
 
 export default function GameScreen({ state, chat, act, onLeave }) {
   const { room, game, you, role } = state;
@@ -133,6 +136,14 @@ function WaitingRoom({ room, you, act, onLeave, chat }) {
             Start game ▶
           </button>
         )}
+        {isHost && (
+          <button
+            onClick={() => window.confirm(`Close ${room.name}? Everyone will be returned to the lobby.`) && act('room:close', { code: room.code })}
+            className="bg-red-800/85 hover:bg-red-700 rounded-2xl px-5 py-3"
+          >
+            Close room
+          </button>
+        )}
         <button onClick={onLeave} className="bg-emerald-900/70 hover:bg-emerald-800 rounded-2xl px-5 py-3">Leave</button>
       </div>
       {isHost && room.seats.length < 2 && (
@@ -206,6 +217,7 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
   const [showRules, setShowRules] = useState(false);
   const [unread, setUnread] = useState(0);
   const [banner, setBanner] = useState(null);
+  const [jokerChoice, setJokerChoice] = useState(null);
   const [sound, setSound] = useState(soundOn());
   const [autoPass, setAutoPass] = useState(localStorage.getItem('rummy.autopass') === '1');
   const [now, setNow] = useState(Date.now());
@@ -282,6 +294,7 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
     : [], [contract]);
   const stagedIds = new Set((staging || []).flat());
   const leaderScore = Math.min(...game.players.map((p) => p.score));
+  const isHost = room.hostToken === you;
 
   /* ---------- interactions ---------- */
 
@@ -320,8 +333,25 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
     if (canAct && selected.length === 1) return discardCard(selected[0]);
   };
 
-  const layOffOn = (meld, cardId) => {
-    act('game:layOff', { meldId: meld.id, cardId });
+  const jokerEndChoices = (meld, card) => {
+    if (!card?.joker || meld.type !== 'straight') return [];
+    const lowValue = meld.startValue - 1;
+    const highValue = meld.startValue + meld.cards.length;
+    return [
+      lowValue >= 1 && { end: 'low', label: `Low end: ${rankFromValue(lowValue)}${SUIT_GLYPH[meld.suit] || ''}` },
+      highValue <= 14 && { end: 'high', label: `High end: ${rankFromValue(highValue)}${SUIT_GLYPH[meld.suit] || ''}` },
+    ].filter(Boolean);
+  };
+
+  const layOffOn = (meld, cardId, end = null) => {
+    const card = hand.find((c) => c.id === cardId);
+    const choices = jokerEndChoices(meld, card);
+    if (!end && choices.length > 1) {
+      setJokerChoice({ meldId: meld.id, cardId, choices });
+      return;
+    }
+    act('game:layOff', { meldId: meld.id, cardId, end: end || choices[0]?.end });
+    setJokerChoice(null);
     setSelected([]);
   };
 
@@ -396,6 +426,15 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
           <button onClick={() => setShowLog(true)} className="bg-emerald-900/70 hover:bg-emerald-800 rounded-lg px-2.5 py-2" title="Game log & buys">📜</button>
           <button onClick={() => setShowScores(true)} className="bg-emerald-900/70 hover:bg-emerald-800 rounded-lg px-2.5 py-2" title="Scoreboard">🏆</button>
           <button onClick={() => setSound(toggleSound())} className="bg-emerald-900/70 hover:bg-emerald-800 rounded-lg px-2.5 py-2" title="Sound on/off">{sound ? '🔊' : '🔇'}</button>
+          {isHost && (
+            <button
+              onClick={() => window.confirm(`Close ${room.name}? Everyone will be returned to the lobby.`) && act('room:close', { code: room.code })}
+              className="bg-red-800/85 hover:bg-red-700 rounded-lg px-2.5 py-2"
+              title="Close this game for everyone"
+            >
+              Close
+            </button>
+          )}
         </div>
       </header>
 
@@ -645,6 +684,16 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
       {showScores && <Scoreboard players={game.players} round={game.round} onClose={() => setShowScores(false)} />}
       {showLog && <LogDrawer log={game.log || []} buys={game.buys || []} onClose={() => setShowLog(false)} />}
       {showRules && <RuleBook onClose={() => setShowRules(false)} />}
+      {jokerChoice && (
+        <JokerEndChooser
+          choices={jokerChoice.choices}
+          onChoose={(end) => {
+            const meld = game.tableMelds.find((m) => m.id === jokerChoice.meldId);
+            if (meld) layOffOn(meld, jokerChoice.cardId, end);
+          }}
+          onCancel={() => setJokerChoice(null)}
+        />
+      )}
       {game.phase === 'roundEnd' && game.roundSummary && <RoundSummary summary={game.roundSummary} />}
       {game.phase === 'gameOver' && <GameOver players={game.players} onLeave={onLeave} />}
     </div>
@@ -734,6 +783,31 @@ function BuySidebar({ game, you, act, now, buyEligible, myTurn, iRequestedBuy, a
       {!buyEligible && !myTurn && game.buyRequests.length > 0 && (
         <span className="text-[0.7rem] text-amber-200/80 text-center">{game.buyRequests.length} buy request{game.buyRequests.length > 1 ? 's' : ''} pending…</span>
       )}
+    </div>
+  );
+}
+
+function JokerEndChooser({ choices, onChoose, onCancel }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center px-4" onClick={onCancel}>
+      <div className="glass-panel rounded-2xl p-5 max-w-sm w-full shadow-2xl text-center" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-black text-amber-300 mb-2">Place the joker</h2>
+        <p className="text-sm text-emerald-100/80 mb-4">
+          This joker can extend either end of the straight.
+        </p>
+        <div className="flex flex-col gap-2">
+          {choices.map((choice) => (
+            <button
+              key={choice.end}
+              onClick={() => onChoose(choice.end)}
+              className="bg-amber-400 hover:bg-amber-300 text-black font-black rounded-xl px-4 py-3 shadow-lg"
+            >
+              {choice.label}
+            </button>
+          ))}
+        </div>
+        <button onClick={onCancel} className="mt-4 text-sm text-emerald-200/70 hover:text-white">Cancel</button>
+      </div>
     </div>
   );
 }

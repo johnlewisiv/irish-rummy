@@ -310,6 +310,9 @@ export class Game {
     const card = this._cardFromHand(p, cardId);
     const opts = layoffOptions(card, meld);
     if (!opts) throw new Err("That card doesn't fit there.");
+    if (meld.type === 'straight' && card.joker && opts.low && opts.high && !['low', 'high'].includes(end)) {
+      throw new Err('Choose low or high end for this joker.');
+    }
     p.hand.splice(p.hand.findIndex((h) => h.id === cardId), 1);
     if (meld.type === 'set') {
       meld.cards.push(card); // sets die: order/manipulation is irrelevant

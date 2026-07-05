@@ -47,7 +47,7 @@ export class RoomManager {
   get(code) { return this.rooms.get((code || '').toUpperCase()); }
 
   /** Public lobby listing (a few public games — no need to hide them). */
-  list() {
+  list(viewerToken = null) {
     return [...this.rooms.values()].map((r) => ({
       code: r.code,
       name: r.name,
@@ -56,6 +56,8 @@ export class RoomManager {
       phase: r.game ? r.game.phase : 'lobby',
       round: r.game ? r.game.round : 0,
       spectators: r.spectators.length,
+      canClose: !!viewerToken && r.hostToken === viewerToken,
+      canRejoin: !!viewerToken && !!r.game && r.seats.some((s) => s.token === viewerToken),
     }));
   }
 

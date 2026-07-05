@@ -66,6 +66,11 @@ function emptyHandInto(player, game) {
   assert.throws(() => game.discard('a', threeC.id), /must play the joker/);
   // …but can play the joker to extend the same straight (as 8♥ or K♥).
   const joker = a.hand.find((c) => c.joker);
+  assert.throws(
+    () => game.layOff('a', 'mX', joker.id),
+    /Choose low or high end/,
+    'ambiguous joker placement requires a chosen end',
+  );
   game.layOff('a', 'mX', joker.id, 'high');
   assert.strictEqual(game.mustPlayJoker['a'], undefined, 'joker obligation cleared');
   assert.strictEqual(game.tableMelds[0].cards.length, 5, 'straight extended to 5');
