@@ -2,10 +2,16 @@ services:
   - type: web
     name: irish-rummy
     env: node
-    plan: free
-    buildCommand: npm --prefix client install && npm --prefix client run build && npm --prefix server install
+    plan: starter
+    buildCommand: cd client && npm install && npm run build && cd ../server && npm install
     startCommand: node server/src/index.js
     autoDeploy: true
+    disk:
+      name: game-state
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: NODE_VERSION
         value: 20
+      - key: ROOM_STATE_FILE
+        value: /var/data/irish-rummy-state.json

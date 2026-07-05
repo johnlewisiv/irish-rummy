@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url';
 import { Server } from 'socket.io';
 import { RoomManager } from './rooms.js';
 import { Err } from './game.js';
+import { JsonStateStore } from './persistence.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3050;
@@ -24,7 +25,47 @@ const io = new Server(server, {
 });
 
 const rooms = new RoomManager();
-setInterval(() => rooms.sweep(), 10 * 60 * 1000);
+const stateStore = new JsonStateStore();
+
+function saveRooms() {
+  stateStore.save(rooms.toSnapshot());
+}
+
+/** Send everyone in the room their personalized game state + room info. */
+function broadcastRoom(room) {
+  const summary = {
+    code: room.code,
+    name: room.name,
+    hostToken: room.hostToken,
+    started: !!room.game,
+    buyWindowMs: room.buyWindowMs,
+    seats: room.seats.map((s) => ({
+      token: s.token, name: s.name, isBot: s.isBot, difficulty: s.difficulty, avatar: s.avatar,
+    })),
+    spectatorCount: room.spectators.length,
+  };
+  for (const s of io.of('/').sockets.values()) {
+    if (s.data.roomCode !== room.code) continue;
+    const view = room.game ? room.game.viewFor(s.data.role === 'player' ? s.data.token : null) : null;
+    s.emit('room:state', { room: summary, game: view, you: s.data.token, role: s.data.role });
+  }
+}
+
+function roomChanged(room) {
+  saveRooms();
+  broadcastRoom(room);
+}
+
+const restoredRooms = rooms.loadSnapshot(stateStore.load(), (room) => roomChanged(room));
+if (stateStore.enabled) {
+  console.log(`Irish Rummy persistence enabled: ${stateStore.file}${restoredRooms ? ` (${restoredRooms} room${restoredRooms === 1 ? '' : 's'} restored)` : ''}`);
+} else {
+  console.log('Irish Rummy persistence disabled: set ROOM_STATE_FILE or attach /var/data to preserve rooms across restarts.');
+}
+
+setInterval(() => {
+  if (rooms.sweep()) saveRooms();
+}, 10 * 60 * 1000);
 
 function closeRoom(room) {
   io.to(room.code).emit('room:closed', { code: room.code, name: room.name });
@@ -35,10 +76,20 @@ function closeRoom(room) {
     s.data.role = null;
   }
   rooms.destroyRoom(room.code);
+  saveRooms();
 }
 
 // ------------------------------------------------------------------
 // Static client (built by `npm run build` in ../client)
+app.get(`${BASE_PATH}/healthz`, (_req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    ok: true,
+    persistenceEnabled: stateStore.enabled,
+    rooms: rooms.rooms.size,
+  });
+});
+
 const clientDist = path.join(__dirname, '..', '..', 'client', 'dist');
 app.use(BASE_PATH || '/', express.static(clientDist));
 app.get(`${BASE_PATH}/*`, (_req, res) => res.sendFile(path.join(clientDist, 'index.html')));
@@ -49,26 +100,6 @@ io.on('connection', (socket) => {
   // socket.data: { token, name, roomCode, role }
 
   const user = () => ({ token: socket.data.token, name: socket.data.name });
-
-  /** Send everyone in the room their personalized game state + room info. */
-  function broadcastRoom(room) {
-    const summary = {
-      code: room.code,
-      name: room.name,
-      hostToken: room.hostToken,
-      started: !!room.game,
-      buyWindowMs: room.buyWindowMs,
-      seats: room.seats.map((s) => ({
-        token: s.token, name: s.name, isBot: s.isBot, difficulty: s.difficulty, avatar: s.avatar,
-      })),
-      spectatorCount: room.spectators.length,
-    };
-    for (const s of io.of('/').sockets.values()) {
-      if (s.data.roomCode !== room.code) continue;
-      const view = room.game ? room.game.viewFor(s.data.role === 'player' ? s.data.token : null) : null;
-      s.emit('room:state', { room: summary, game: view, you: s.data.token, role: s.data.role });
-    }
-  }
 
   function currentRoom() {
     return socket.data.roomCode ? rooms.get(socket.data.roomCode) : null;
@@ -100,7 +131,7 @@ io.on('connection', (socket) => {
       socket.join(found.room.code);
       const p = found.room.game?.getPlayer(token);
       if (p) p.connected = true;
-      broadcastRoom(found.room);
+      roomChanged(found.room);
       return { rejoined: found.room.code };
     }
     return {};
@@ -114,7 +145,7 @@ io.on('connection', (socket) => {
     socket.data.roomCode = room.code;
     socket.data.role = 'player';
     socket.join(room.code);
-    broadcastRoom(room);
+    roomChanged(room);
     return { code: room.code };
   }));
 
@@ -138,7 +169,7 @@ io.on('connection', (socket) => {
     socket.data.roomCode = room.code;
     socket.join(room.code);
     socket.emit('chat:history', room.chat.slice(-50));
-    broadcastRoom(room);
+    roomChanged(room);
     return { code: room.code, role: socket.data.role };
   }));
 
@@ -161,6 +192,7 @@ io.on('connection', (socket) => {
         rooms.destroyRoom(room.code);
         socket.leave(room.code);
         socket.data.roomCode = null;
+        saveRooms();
         return {};
       }
       if (room.hostToken === socket.data.token) {
@@ -172,7 +204,7 @@ io.on('connection', (socket) => {
     }
     socket.leave(room.code);
     socket.data.roomCode = null;
-    broadcastRoom(room);
+    roomChanged(room);
     return {};
   }));
 
@@ -180,14 +212,14 @@ io.on('connection', (socket) => {
     const room = mustBeHost();
     const res = rooms.addBot(room, difficulty);
     if (res.error) throw new Err(res.error);
-    broadcastRoom(room);
+    roomChanged(room);
   }));
 
   socket.on('room:removeBot', guard(({ token }) => {
     const room = mustBeHost();
     if (room.game) throw new Err('Game already started.');
     room.seats = room.seats.filter((s) => !(s.isBot && s.token === token));
-    broadcastRoom(room);
+    roomChanged(room);
   }));
 
   socket.on('room:settings', guard(({ buyWindowMs }) => {
@@ -196,7 +228,7 @@ io.on('connection', (socket) => {
     const allowed = [0, 8000, 30000, 120000, 3600000];
     if (!allowed.includes(Number(buyWindowMs))) throw new Err('Invalid buy timer.');
     room.buyWindowMs = Number(buyWindowMs);
-    broadcastRoom(room);
+    roomChanged(room);
   }));
 
   socket.on('room:avatar', guard(({ avatar }) => {
@@ -204,14 +236,14 @@ io.on('connection', (socket) => {
     if (!room) throw new Err('You are not in a room.');
     const res = rooms.setAvatar(room, socket.data.token, avatar);
     if (res.error) throw new Err(res.error);
-    broadcastRoom(room);
+    roomChanged(room);
   }));
 
   socket.on('room:start', guard(() => {
     const room = mustBeHost();
-    const res = rooms.startGame(room, () => broadcastRoom(room));
+    const res = rooms.startGame(room, () => roomChanged(room));
     if (res.error) throw new Err(res.error);
-    broadcastRoom(room);
+    roomChanged(room);
   }));
 
   function mustBeHost() {
@@ -227,7 +259,7 @@ io.on('connection', (socket) => {
     if (!room?.game) throw new Err('No game in progress.');
     if (socket.data.role !== 'player') throw new Err('Spectators cannot play.');
     fn(room.game, payload);
-    broadcastRoom(room);
+    roomChanged(room);
   });
 
   socket.on('game:draw', gameAction((g, { from }) => g.draw(socket.data.token, from)));
@@ -254,6 +286,7 @@ io.on('connection', (socket) => {
     if (!msg.text) return {};
     room.chat.push(msg);
     if (room.chat.length > 200) room.chat.shift();
+    saveRooms();
     io.to(room.code).emit('chat:message', msg);
   }));
 
@@ -271,7 +304,7 @@ io.on('connection', (socket) => {
       if (p) p.connected = false; // seat is kept — they can reconnect
       room.game?._maybeCloseBuyWindow(); // don't wait on someone who left
     }
-    broadcastRoom(room);
+    roomChanged(room);
   });
 });
 

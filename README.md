@@ -44,7 +44,7 @@ On your turn: click the deck or the discard pile to draw. Select cards (click) a
 
 ```
 irish-rummy/
-├── server/                  Node.js + Express + Socket.io (in-memory state)
+├── server/                  Node.js + Express + Socket.io
 │   ├── src/deck.js          Physical deck construction, card values, shuffle
 │   ├── src/rules.js         Contracts, set/straight validation (with joker
 │   │                        inference), layoff rules, joker-swap rule, and a
@@ -55,6 +55,7 @@ irish-rummy/
 │   ├── src/bots.js          Bot AI: plan-based play (greedy partial contract fill)
 │   │                        in three difficulties
 │   ├── src/rooms.js         Lobby: room codes, seats, bots, spectators, sweeping
+│   ├── src/persistence.js   Disk-backed room/game snapshots for restart recovery
 │   ├── src/index.js         Socket protocol + static hosting of the built client
 │   └── test/                rules.test.js · engine.test.js · simulate.js
 └── client/                  React 18 + Vite + Tailwind v4
@@ -70,6 +71,8 @@ irish-rummy/
 
 **Connection drops**: seats are keyed to a per-tab session token, not to the socket. Refresh the page or reopen the laptop and you're back in your seat with your cards. Because the token is per *tab*, two tabs in the same browser are two different players — a couple can share one computer with two windows.
 
+**Restart recovery**: when `ROOM_STATE_FILE` is set (or `/var/data` exists on Render), the server writes a small JSON snapshot after every room/game change. Running rooms, hands, scores, chat, buy windows, and room codes are restored when the Node process restarts. For async family games, pick **1 hour** or **No timer** for the buy timer so play does not advance while everyone is away.
+
 ## Deploying to irishrummy.com
 
 The app is self-contained: one Node process serves the built React client and the Socket.io room-code server. Use a Node web service, not static hosting or WordPress.
@@ -80,10 +83,12 @@ This repo includes `render.yaml`, so Render can create the service from the repo
 
 Service type: **Web Service**
 
+Plan: **Starter** plus a small persistent disk. The disk is what lets open games survive deploys/restarts; the paid instance is what prevents free-service sleeping.
+
 Build command:
 
 ```bash
-npm --prefix client install && npm --prefix client run build && npm --prefix server install
+cd client && npm install && npm run build && cd ../server && npm install
 ```
 
 Start command:
@@ -94,16 +99,24 @@ node server/src/index.js
 
 Render provides `PORT`, HTTPS, and custom-domain TLS automatically. Add `irishrummy.com` as a custom domain in the Render service, then point the Porkbun DNS records to the values Render gives you.
 
+Persistent room state:
+
+- Disk mount path: `/var/data`
+- Disk size: 1 GB is plenty for family games
+- Env var: `ROOM_STATE_FILE=/var/data/irish-rummy-state.json`
+
+Only files under the disk mount survive a Render restart. The app automatically disables persistence when no state file path is configured, which is fine for local development.
+
 ### Railway
 
 Railway can run the same commands:
 
 ```bash
-npm --prefix client install && npm --prefix client run build && npm --prefix server install
+cd client && npm install && npm run build && cd ../server && npm install
 node server/src/index.js
 ```
 
-No database is required. Running games live in memory, so a service restart ends active rooms; families can create a fresh room code after a restart.
+No database is required for the disk-backed Render setup. If you do not configure `ROOM_STATE_FILE`, running games live only in memory and a service restart ends active rooms.
 
 The client auto-detects the path it's served from, so the same build works at `/`, `/rummy/`, or anywhere else.
 
@@ -117,9 +130,10 @@ The client auto-detects the path it's served from, so the same build works at `/
 | `ROUND_PAUSE_MS` | 9000 | Scoreboard pause between rounds |
 | `BUY_WINDOW_MS` | 8000 | Default room buy timer (0 = casual: waits for everyone) |
 | `STRICT_SET_SUITS` | off | `1` = the initial 3 cards of a set must be different suits |
+| `ROOM_STATE_FILE` | `/var/data/irish-rummy-state.json` when `/var/data` exists | JSON snapshot path for persistent rooms |
 
 ## Design choices (and how to change them)
 
 - **Nickname sign-in, no accounts** — chosen for zero-setup family play. To add Google/Apple/email later, drop Firebase Auth into the client, send the ID token in `hello`, and verify it server-side with `firebase-admin`; the token already *is* the identity key, so nothing else changes.
-- **In-memory state, no database** — right-sized for a few concurrent games. A server restart ends running games (lobby and scores are lost). If persistence ever matters, serialize `Game` state to Supabase/Firestore on change and rehydrate on boot.
+- **Disk-backed state, no database** — right-sized for a few concurrent family games. The server keeps live state in memory for speed, then snapshots the rooms to disk after each change so deploys/restarts can restore them. For larger public use later, move the same snapshot shape into Postgres or another managed store.
 - **Web-only** — the UI is responsive and touch-friendly (tap-to-select works everywhere; drag-and-drop is a desktop nicety), so phones play fine in the browser.

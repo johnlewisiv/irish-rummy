@@ -12,6 +12,18 @@ import { botDraw, botAct, botDiscard, botWantsBuy } from './bots.js';
 
 let meldSeq = 0;
 
+function clonePlain(value, fallback) {
+  if (value === undefined || value === null) return fallback;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function syncMeldSeq(tableMelds) {
+  for (const meld of tableMelds || []) {
+    const n = /^m(\d+)$/.exec(meld.id || '')?.[1];
+    if (n !== undefined) meldSeq = Math.max(meldSeq, Number(n) + 1);
+  }
+}
+
 export class Game {
   /**
    * @param {object[]} players [{id, name, isBot, difficulty}]
@@ -62,6 +74,134 @@ export class Game {
     this.buys = []; // [{round, name, card}] the buy ledger
     this.roundSummary = null;
     this._timers = [];
+  }
+
+  static fromSnapshot(snapshot, onChange, opts = {}) {
+    const players = (snapshot.players || []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      isBot: !!p.isBot,
+      difficulty: p.difficulty || 'medium',
+      avatar: p.avatar || null,
+    }));
+    const game = new Game(players, onChange, {
+      ...opts,
+      botDelayMs: opts.botDelayMs ?? snapshot.botDelayMs,
+      buyWindowMs: opts.buyWindowMs ?? snapshot.buyWindowMs,
+      maxBuysPerRound: snapshot.maxBuysPerRound,
+    });
+    game.players = (snapshot.players || []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      isBot: !!p.isBot,
+      difficulty: p.difficulty || 'medium',
+      avatar: p.avatar || null,
+      connected: !!p.isBot,
+      hand: clonePlain(p.hand, []),
+      hasGoneDown: !!p.hasGoneDown,
+      score: Number(p.score || 0),
+      roundScores: clonePlain(p.roundScores, []),
+    }));
+    game.botDelayMs = opts.botDelayMs ?? snapshot.botDelayMs ?? Number(process.env.BOT_DELAY_MS ?? 1200);
+    game.deckSize = snapshot.deckSize ?? buildDeck(game.players.length).length;
+    game.round = Number(snapshot.round || 0);
+    game.dealerIndex = Number(snapshot.dealerIndex || 0);
+    game.phase = snapshot.phase || 'idle';
+    game.turnPhase = snapshot.turnPhase || null;
+    game.currentIndex = Number(snapshot.currentIndex || 0);
+    game.drawPile = clonePlain(snapshot.drawPile, []);
+    game.discardPile = clonePlain(snapshot.discardPile, []);
+    game.tableMelds = clonePlain(snapshot.tableMelds, []);
+    game.buyRequests = clonePlain(snapshot.buyRequests, []);
+    game.buyPasses = new Set(snapshot.buyPasses || []);
+    game.buyWindowMs = snapshot.buyWindowMs !== undefined ? snapshot.buyWindowMs : Number(process.env.BUY_WINDOW_MS ?? 8000);
+    game.buyWindow = snapshot.buyWindow ? {
+      expiresAt: null,
+      timer: null,
+      pendingDraw: snapshot.buyWindow.pendingDraw || null,
+      paused: !!snapshot.buyWindow.paused,
+      remainingMs: snapshot.buyWindow.remainingMs ?? null,
+    } : null;
+    game.maxBuysPerRound = Number(snapshot.maxBuysPerRound || 3);
+    game.buysUsed = clonePlain(snapshot.buysUsed, {});
+    game.mustPlayJoker = clonePlain(snapshot.mustPlayJoker, {});
+    game.lastEvent = snapshot.lastEvent || null;
+    game.log = clonePlain(snapshot.log, []);
+    game.buys = clonePlain(snapshot.buys, []);
+    game.roundSummary = clonePlain(snapshot.roundSummary, null);
+    game._timers = [];
+    syncMeldSeq(game.tableMelds);
+    if (game.phase !== 'idle') game.assertDeckIntegrity();
+    game._resumeRuntime();
+    return game;
+  }
+
+  toSnapshot() {
+    return {
+      players: this.players.map((p) => ({
+        id: p.id,
+        name: p.name,
+        isBot: !!p.isBot,
+        difficulty: p.difficulty,
+        avatar: p.avatar,
+        hand: p.hand,
+        hasGoneDown: p.hasGoneDown,
+        score: p.score,
+        roundScores: p.roundScores,
+      })),
+      botDelayMs: this.botDelayMs,
+      deckSize: this.deckSize,
+      round: this.round,
+      dealerIndex: this.dealerIndex,
+      phase: this.phase,
+      turnPhase: this.turnPhase,
+      currentIndex: this.currentIndex,
+      drawPile: this.drawPile,
+      discardPile: this.discardPile,
+      tableMelds: this.tableMelds,
+      buyRequests: this.buyRequests,
+      buyPasses: [...this.buyPasses],
+      buyWindowMs: this.buyWindowMs,
+      buyWindow: this.buyWindow ? {
+        pendingDraw: this.buyWindow.pendingDraw || null,
+        paused: !!this.buyWindow.paused,
+        remainingMs: this.buyWindow.paused
+          ? (this.buyWindow.remainingMs ?? null)
+          : this.buyWindow.expiresAt
+            ? Math.max(1000, this.buyWindow.expiresAt - Date.now())
+            : null,
+      } : null,
+      maxBuysPerRound: this.maxBuysPerRound,
+      buysUsed: this.buysUsed,
+      mustPlayJoker: this.mustPlayJoker,
+      lastEvent: this.lastEvent,
+      log: this.log,
+      buys: this.buys,
+      roundSummary: this.roundSummary,
+    };
+  }
+
+  _resumeRuntime() {
+    this._restoreBuyWindowTimer();
+    if (this.phase === 'roundEnd') {
+      const t = setTimeout(() => this.startNextRound() || this.onChange(),
+        Number(process.env.ROUND_PAUSE_MS ?? 9000));
+      this._timers.push(t);
+    } else {
+      this._scheduleBot();
+    }
+  }
+
+  _restoreBuyWindowTimer() {
+    const w = this.buyWindow;
+    if (!w || this.buyWindowMs === 0 || w.paused) return;
+    const delay = Math.max(1000, w.remainingMs || this.buyWindowMs);
+    w.expiresAt = Date.now() + delay;
+    w.timer = setTimeout(() => {
+      this._closeBuyWindow(true);
+      this.onChange();
+    }, delay);
+    this._timers.push(w.timer);
   }
 
   /* ---------------- round lifecycle ---------------- */

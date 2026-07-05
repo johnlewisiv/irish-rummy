@@ -7,6 +7,18 @@ import { Game } from './game.js';
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 let botSeq = 0;
 
+function clonePlain(value, fallback) {
+  if (value === undefined || value === null) return fallback;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function syncBotSeq(room) {
+  for (const seat of room.seats || []) {
+    const n = /^bot-(\d+)$/.exec(seat.token || '')?.[1];
+    if (n !== undefined) botSeq = Math.max(botSeq, Number(n) + 1);
+  }
+}
+
 export const BOT_NAMES = {
   easy: 'Pippin',
   medium: 'Tom Bombadil',
@@ -21,6 +33,50 @@ export const AVATARS = [
 export class RoomManager {
   constructor() {
     this.rooms = new Map(); // code -> room
+  }
+
+  toSnapshot() {
+    return {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      rooms: [...this.rooms.values()].map((room) => ({
+        code: room.code,
+        name: room.name,
+        hostToken: room.hostToken,
+        seats: room.seats,
+        spectators: room.spectators,
+        chat: room.chat,
+        buyWindowMs: room.buyWindowMs,
+        createdAt: room.createdAt,
+        game: room.game ? room.game.toSnapshot() : null,
+      })),
+    };
+  }
+
+  loadSnapshot(snapshot, onGameChange = () => {}) {
+    if (!snapshot?.rooms || !Array.isArray(snapshot.rooms)) return 0;
+    this.rooms.clear();
+    for (const raw of snapshot.rooms) {
+      if (!raw?.code) continue;
+      const room = {
+        code: String(raw.code).toUpperCase(),
+        name: raw.name || 'Irish Rummy room',
+        hostToken: raw.hostToken,
+        seats: clonePlain(raw.seats, []),
+        spectators: clonePlain(raw.spectators, []),
+        chat: clonePlain(raw.chat, []).slice(-200),
+        game: null,
+        buyWindowMs: raw.buyWindowMs !== undefined
+          ? Number(raw.buyWindowMs)
+          : Number(process.env.BUY_WINDOW_MS ?? 8000),
+        createdAt: raw.createdAt || Date.now(),
+      };
+      if (!room.hostToken && room.seats[0]) room.hostToken = room.seats[0].token;
+      if (raw.game) room.game = Game.fromSnapshot(raw.game, () => onGameChange(room), { buyWindowMs: room.buyWindowMs });
+      syncBotSeq(room);
+      this.rooms.set(room.code, room);
+    }
+    return this.rooms.size;
   }
 
   createRoom(name, host) {
@@ -139,10 +195,15 @@ export class RoomManager {
   /** Drop stale finished/abandoned rooms (called periodically). */
   sweep() {
     const now = Date.now();
+    let changed = false;
     for (const [code, room] of this.rooms) {
       const dead = room.game?.phase === 'gameOver' && now - room.createdAt > 60 * 60 * 1000;
       const abandoned = !room.game && now - room.createdAt > 12 * 60 * 60 * 1000;
-      if (dead || abandoned) this.destroyRoom(code);
+      if (dead || abandoned) {
+        this.destroyRoom(code);
+        changed = true;
+      }
     }
+    return changed;
   }
 }

@@ -7,6 +7,11 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss()],
+  build: {
+    // Keep deploy builds low-resource; the app is small and served over HTTPS/CDN.
+    minify: false,
+    reportCompressedSize: false,
+  },
   server: {
     proxy: {
       '/socket.io': { target: 'http://localhost:3050', ws: true },
