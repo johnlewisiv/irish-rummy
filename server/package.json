@@ -1,0 +1,16 @@
+{
+  "name": "irish-rummy-server",
+  "version": "1.0.0",
+  "description": "Irish Rummy multiplayer game server (in memory of Aunt Peggy)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node test/rules.test.js && node test/engine.test.js && node test/window.test.js && node test/simulate.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}

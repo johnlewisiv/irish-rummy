@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: irish-rummy
+    env: node
+    plan: free
+    buildCommand: npm --prefix client install && npm --prefix client run build && npm --prefix server install
+    startCommand: node server/src/index.js
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20
