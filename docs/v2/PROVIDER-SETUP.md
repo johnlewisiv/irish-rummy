@@ -1,6 +1,6 @@
 # Google sign-in and deployment gates
 
-Status on September 13, 2026: Google is enabled in the dedicated Supabase project, and an actual Google sign-in returned successfully to the local app's personal My games page. Profile avatar changes survived reload. A private local table was created and its invitation copied. Production Google sign-in, release deployment, and game migration are still pending. No new paid subscription was purchased.
+Status on September 13, 2026: v2 is live at https://irishrummy.com with Postgres persistence. All seven original games were preserved, independently backed up, imported and fully verified. Real owner Google sign-in opened the production My games page and a new private test table saved successfully. No new paid subscription was purchased. See [the live release record](RELEASE-2026-09-13.md) for exact evidence and remaining real-device checks.
 
 The dedicated Google Cloud project `irish-rummy` (project number `749955563373`) and Google Auth consent configuration exist. The owner approved My Billing Account 1 for sign-in only, with no paid cloud resources enabled, and approved the Google API Services User Data Policy. The owner created `Irish Rummy Web` and entered its credentials directly into Supabase. The coordinator independently verified Google Enabled, saved the exact redirect allowlist below, and configured the app with the public Supabase URL and publishable key. No OAuth secret was copied into chat or Git.
 
@@ -24,11 +24,11 @@ The dedicated Google Cloud project `irish-rummy` (project number `749955563373`)
 
 ## Database and host
 
-The coordinator verified the live dedicated Supabase connection using TLS and the project's CA certificate, then applied `server/db/002-account-state.sql` on September 13. The constraint now accepts snapshot version 3; the table contained zero snapshots both before and after. The migration only widens the existing private snapshot constraints; it does not expose a Data API or change grants. No production game state has been imported and the production state key has not been initialized.
+The coordinator verified the live dedicated Supabase connection using TLS and the project's CA certificate, then applied `server/db/002-account-state.sql` on September 13. The constraint now accepts snapshot version 3; the table contained zero snapshots both before and after. The migration only widens the existing private snapshot constraints; it does not expose a Data API or change grants. That was the pre-cutover checkpoint. The subsequent approved cutover imported all seven original games into `family-games` and preserved an independent original backup row; see the release record.
 
-Preserve/import the existing Render disk snapshot using `CUTOVER.md` before choosing the production state key. Never bootstrap an empty database over live family rooms. A fresh request to `https://irishrummy.com/healthz` returned `ok: true`, `persistenceEnabled: true`, and seven rooms; it did not identify the storage backend or verify v2 deployment.
+The approved import is complete. Keep the production key `family-games` and do not rerun the importer. The first live v2 health check explicitly returned `persistence: "postgres"`, `state: "ready"`, and seven rooms. A later QA table legitimately increases the count; the seven originals remain preserved.
 
-Use one Node/Socket.IO server. Keep a copy of the pre-v2 snapshot with its old binary for rollback; an old server must not overwrite a v3 snapshot. After deployment, verify health and save/restart/rejoin on the actual host before calling persistence shipped.
+Use one Node/Socket.IO server. Keep the pre-v2 snapshot and old binary as historical recovery evidence. V2 has accepted writes: fix forward using a version-3-compatible release, and never let an old server overwrite the v3 snapshot. Live save/restart/rejoin evidence is recorded separately from successful startup in the release record.
 
 ## Incremental cost
 
@@ -38,6 +38,12 @@ Use one Node/Socket.IO server. Keep a copy of the pre-v2 snapshot with its old b
 
 Primary setup references: [Supabase Google Auth](https://supabase.com/docs/guides/auth/social-login/auth-google), [redirect URL configuration](https://supabase.com/docs/guides/auth/redirect-urls).
 
-## Live host inspection
+## Historical host inspection before cutover
 
 Read-only Render inspection verified service `srv-d953gfu7r5hc73dvnnbg`, Ohio, tracked branch `main`, and deployed SHA `707d0de679a7989557a883161d7911d111283d31`. The start command is `node server/src/index.js`; the build command installs/builds the client and installs server dependencies. The 1 GB disk remains attached at `/var/data`; disk services do not support horizontal scaling. No live configuration or deployment was changed during this inspection.
+
+The approved live cutover supersedes the inspection above: the existing service now uses the dedicated Postgres database, Node 22, and the reviewed v2 code. The disk stays attached and auto-deploy is off. See `RELEASE-2026-09-13.md`.
+
+## Google audience check
+
+The live Google console remains External / Testing with no test-user entries; publishing requires additional branding configuration. The actual OAuth request uses only `email` and `profile`. Google documents a basic-identity exception permitting any user without the test allowlist for `openid`, `email` and `profile` only ([official audience rules](https://developers.google.com/identity/protocols/oauth2/production-readiness/overview)). This supports family access with the current basic scopes; another real family account/device remains untested. Workspace administrators may apply their own restrictions.

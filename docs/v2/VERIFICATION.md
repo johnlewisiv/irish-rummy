@@ -1,6 +1,6 @@
 # Irish Rummy v2 verification
 
-Verified locally on September 13, 2026, after the Mac restart. These results apply to the working v2 code, not a production deployment.
+Local checks below were completed September 13, 2026 after the Mac restart. The subsequent approved production deployment, seven-game migration, and real owner Google callback are recorded in [the live release evidence](RELEASE-2026-09-13.md). Historical local-only statements below describe those earlier checks, not the current release status.
 
 ## Automated checks
 
@@ -67,3 +67,7 @@ Short codes now create a private request for host approval; existing members reo
 All 39 client tests passed after fixing same-document invitation capture, invitation precedence over an older remembered room, and stale account responses. The invitation secret is saved in the tab before the fragment is cleared, so the Google redirect preserves the join choice. An old initialization/refresh/token-read response cannot override a newer account or cross-tab sign-out. Pending code approvals pause while a Profile or New game draft is open. All 26 frontend source files match the tested runtime.
 
 The coordinator additionally verified same-document invitation navigation, sign-out hiding private games, real Google return preserving the invitation, explicit joining, and existing-member short-code reopening in the rendered local app. Browser warning/error logs were empty. The final copy-link usability adjustment was rebuilt successfully with 121 modules.
+
+## Post-cutover dependency patch
+
+Client `socket.io-parser` was narrowly updated from 4.2.6 to 4.2.7: only its version, resolved URL and integrity changed in the lockfile. All 39 client tests passed. A bounded regression confirmed rejection of malformed zero-attachment frames while valid JSON/binary events round-trip. The production dependency audit reports zero vulnerabilities. The build passed with 121 modules, producing `index-eoe-7fBv.js`, `index-WBCh6DDP.js` and `index-CyoDOSMN.css`; source/runtime parity and active art were verified. Six development/build-tool audit findings remain separate from the shipped dependency graph. Deployment of this patch is recorded in the release evidence when verified.

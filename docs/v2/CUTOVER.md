@@ -1,6 +1,6 @@
 # Irish Rummy v2 cutover
 
-This is an operator runbook. No live game import, hosting cutover, or rollback was performed while writing it.
+The initial runbook below was used for the approved September 13 cutover, which is now complete. All seven games were preserved and imported before v2 opened traffic. See [the release record](RELEASE-2026-09-13.md) for frozen backup paths, checksum and live evidence. Do not rerun the import: v2 has accepted new writes and the fix-forward boundary applies. Starting-point and preflight observations below are historical.
 
 ## Verified starting point
 
@@ -118,4 +118,4 @@ A preflight copy was created on the existing Render disk on September 13, 2026, 
 - Source bytes were unchanged during copy verification. The writer was **not frozen**; this copy is not the final cutover snapshot and cannot replace the freeze/final backup above.
 - Live runtime was Node v26.4.0. Neither database nor public Google-auth configuration was present on the deployed server.
 
-The copy remains on the original disk; an independent protected copy still needs to be made before a production cutover. No game contents or recovery tokens were printed.
+This preliminary copy remains on the original disk. The later frozen disk backup and independent Supabase original-byte backup were both fully verified before import, as recorded in `RELEASE-2026-09-13.md`. No original game contents or recovery tokens were printed.
