@@ -1,5 +1,7 @@
 # Refresh and recovery verification — September 12, 2026
 
+> The subsequent [classic card-room revision](../design/refresh-2026-09/classic/README.md) replaces the first visual direction described below. The database and recovery evidence remains applicable.
+
 ## Implemented
 
 The sign-in, saved-player chooser, lobby, waiting room, cards, game table and chat

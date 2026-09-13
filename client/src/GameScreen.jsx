@@ -2,14 +2,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Card, { cardLabel, Avatar, ALL_AVATARS } from './Card.jsx';
 import ChatPanel from './ChatPanel.jsx';
+import Icon from './Icon.jsx';
 import { soundOn, toggleSound, dingTurn, chimeBuy, roundEnd as roundEndSound, fanfare } from './sounds.js';
-import { artUrl } from './socket.js';
 
-const BuyToken = ({ className = 'w-5 h-5' }) => (
-  <img src={artUrl('buy-token.png')} alt="" draggable={false}
-    className={`${className} inline-block align-[-0.2em]`}
-    onError={(e) => { e.currentTarget.replaceWith('💰'); }} />
-);
+// Older saved games include decorative prefixes in their system event text.
+// Keep the event wording and suit symbols; only remove those leading prefixes.
+const eventText = (text) => String(text || '').replace(/^(?:[\u{1F4B0}\u23F8\u25B6]\uFE0F?\s*)+/u, '');
 
 const SUIT_ORDER = { S: 0, H: 1, D: 2, C: 3 };
 const RANK_VAL = { A: 14, K: 13, Q: 12, J: 11 };
@@ -51,19 +49,19 @@ function WaitingRoom({ room, you, act, onLeave, chat }) {
   };
   return (
     <main className="waiting-shell">
-      <header className="welcome-header"><span className="brand">Irish Rummy<span className="brand-period">.</span></span><button className="text-button" onClick={onLeave}>Back to lobby</button></header>
-      <div className="waiting-heading"><div><h1>{room.name}</h1><p>A few good people. Seven rounds. One family tradition.</p></div><button onClick={copy} className="invite-code" aria-label={`Copy room code ${room.code}`}><span>{room.code}</span><small>{copied ? 'Copied to clipboard' : 'Copy code to invite family'}</small></button></div>
+      <header className="welcome-header"><span className="brand">Irish Rummy<span className="brand-period">.</span></span><button className="text-button" onClick={onLeave}><Icon name="leave" /> Back to lobby</button></header>
+      <div className="waiting-heading"><div><h1>{room.name}</h1><p>A few good people. Seven rounds. One family tradition.</p></div><button onClick={copy} className="invite-code" aria-label={`Copy room code ${room.code}`}><span>{room.code}</span><small><Icon name={copied ? 'check' : 'copy'} size={14} /> {copied ? 'Copied to clipboard' : 'Copy code to invite family'}</small></button></div>
       <div className="waiting-layout">
         <div className="waiting-main">
           <section className="players-section"><h2>Players <span>{room.seats.length} / 6</span></h2><ul className="waiting-players">{room.seats.map((seat) => <li key={seat.token}><Avatar name={seat.name} isBot={seat.isBot} avatar={seat.avatar} size={3.2} /><div><strong>{seat.name}{seat.token === you && ' (you)'}</strong><small>{seat.token === room.hostToken ? 'Host' : seat.isBot ? `${seat.difficulty === 'extreme' ? 'Peggy' : seat.difficulty} bot` : 'Ready for the table'}</small></div>{isHost && seat.isBot && <button onClick={() => act('room:removeBot', { token: seat.token })} className="text-button danger-link">Remove</button>}</li>)}</ul>
           {isHost && room.seats.length < 6 && <div className="bot-controls"><select aria-label="Bot difficulty" value={difficulty} onChange={(e) => setDifficulty(e.target.value)}><option value="easy">Easy · Pippin</option><option value="medium">Medium · Tom Bombadil</option><option value="hard">Hard · Saruman</option><option value="extreme">Peggy</option></select><button onClick={() => act('room:addBot', { difficulty })} className="outline-button">Add bot</button>{difficulty === 'extreme' && <p className="form-note">Peggy learned from the nuns. She counts cards. You've been warned.</p>}</div>}
           </section>
-          {mySeat && <section className="portrait-section"><h3>Choose your portrait</h3><div className="portrait-options">{ALL_AVATARS.map((avatar) => <Avatar key={avatar} name={avatar.replace('avatar-', '').replace('.png', '')} avatar={avatar} size={3.2} selected={mySeat.avatar === avatar} onClick={() => act('room:avatar', { avatar })} />)}</div></section>}
+          {mySeat && <section className="portrait-section"><h3>Choose your color</h3><div className="portrait-options">{ALL_AVATARS.map((avatar) => <Avatar key={avatar} name={mySeat.name} avatar={avatar} size={3.2} selected={mySeat.avatar === avatar} onClick={() => act('room:avatar', { avatar })} />)}</div></section>}
           <section className="timer-section"><label htmlFor="buy-timer">Buy timer</label>{isHost ? <select id="buy-timer" value={room.buyWindowMs ?? 8000} onChange={(e) => act('room:settings', { buyWindowMs: Number(e.target.value) })}>{BUY_TIMER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <p>{BUY_TIMER_OPTIONS.find((option) => option.value === (room.buyWindowMs ?? 8000))?.label}</p>}<p className="form-note">Time for everyone to buy or pass after a discard. Anyone can pause during the game.</p></section>
-          <div className="waiting-actions">{isHost && <button onClick={() => act('room:start')} disabled={room.seats.length < 2} className="primary-button">Start game</button>}<button onClick={() => setShowRules(true)} className="text-button">How to play</button>{isHost && <button onClick={() => window.confirm(`Close ${room.name}? Everyone will be returned to the lobby.`) && act('room:close', { code: room.code })} className="text-button danger-link">Close room</button>}</div>
+          <div className="waiting-actions">{isHost && <button onClick={() => act('room:start')} disabled={room.seats.length < 2} className="primary-button"><Icon name="play" /> Start game</button>}<button onClick={() => setShowRules(true)} className="text-button"><Icon name="rules" /> How to play</button>{isHost && <button onClick={() => window.confirm(`Close ${room.name}? Everyone will be returned to the lobby.`) && act('room:close', { code: room.code })} className="text-button danger-link"><Icon name="close" /> Close room</button>}</div>
           <p className="form-note">{isHost ? room.seats.length < 2 ? 'Add a bot or invite a friend. The game needs at least 2 players.' : 'Everyone here? Deal the first round when you are ready.' : 'Waiting for the host to deal the first round…'}</p>
         </div>
-        <aside className="waiting-aside"><img className="waiting-lake" src={artUrl('lake-house-v2.png')} alt="The quiet lake outside the family card room" /><ChatPanel chat={chat} act={act} inline /></aside>
+        <aside className="waiting-aside"><ChatPanel chat={chat} act={act} inline /></aside>
       </div>
       {showRules && <RuleBook onClose={() => setShowRules(false)} />}
     </main>
@@ -82,8 +80,8 @@ export function RuleBook({ onClose }) {
     <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center px-4 py-6" onClick={onClose}>
       <div role="dialog" aria-modal="true" aria-label="How to play Irish Rummy" className="glass-panel rounded-2xl max-w-lg w-full max-h-full flex flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-3 border-b border-emerald-800">
-          <b className="text-lg">📖 How to play Irish Rummy</b>
-          <button onClick={onClose} aria-label="Close dialog" className="text-emerald-300 hover:text-white text-lg">✕</button>
+          <b className="text-lg"><Icon name="rules" /> How to play Irish Rummy</b>
+          <button onClick={onClose} aria-label="Close dialog" className="text-emerald-300 hover:text-white text-lg"><Icon name="close" /></button>
         </div>
         <div className="overflow-y-auto px-5 py-4 text-sm flex flex-col gap-3 text-emerald-50/90">
           <p><b className="text-amber-300">The goal:</b> seven rounds, lowest total score wins. Points are BAD — they're the cards stuck in your hand when someone goes out.</p>
@@ -158,7 +156,7 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
   useEffect(() => {
     if (myTurn && !wasMyTurn.current) dingTurn();
     wasMyTurn.current = myTurn;
-    document.title = myTurn ? '🟡 Your turn! — Irish Rummy' : 'Irish Rummy — Aunt Peggy\'s Game';
+    document.title = myTurn ? 'Your turn — Irish Rummy' : 'Irish Rummy — Aunt Peggy\'s Game';
   }, [myTurn]);
   useEffect(() => {
     // One key per window (a window is identified by the discard on offer).
@@ -324,8 +322,8 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
       <header className="game-header">
         <div className="game-title"><span className="brand brand-compact">Irish Rummy<span className="brand-period">.</span></span><span className="game-room-name">{room.name} <b>{room.code}</b>{role === 'spectator' && <small>Watching</small>}</span></div>
         <nav className="game-utilities" aria-label="Table controls">
-          <button onClick={() => setShowRules(true)}>Rules</button><button onClick={() => setShowLog(true)}>History</button><button onClick={() => setShowScores(true)}>Scores</button><button onClick={() => setSound(toggleSound())} aria-pressed={sound}>Sound {sound ? 'on' : 'off'}</button><button onClick={onLeave}>Leave</button>
-          {isHost && <button className="danger-link" onClick={() => window.confirm(`Close ${room.name}? Everyone will be returned to the lobby.`) && act('room:close', { code: room.code })}>Close table</button>}
+          <button onClick={() => setShowRules(true)}><Icon name="rules" /> Rules</button><button onClick={() => setShowLog(true)}><Icon name="history" /> History</button><button onClick={() => setShowScores(true)}><Icon name="scores" /> Scores</button><button onClick={() => setSound(toggleSound())} aria-pressed={sound}><Icon name={sound ? 'sound' : 'muted'} /> Sound {sound ? 'on' : 'off'}</button><button onClick={onLeave}><Icon name="leave" /> Leave</button>
+          {isHost && <button className="danger-link" onClick={() => window.confirm(`Close ${room.name}? Everyone will be returned to the lobby.`) && act('room:close', { code: room.code })}><Icon name="close" /> Close table</button>}
         </nav>
       </header>
 
@@ -339,9 +337,9 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
             <Avatar name={p.name} isBot={p.isBot} avatar={p.avatar} size={3.4} />
             <div>
               <div className="font-extrabold leading-tight text-sm">
-                {p.score === leaderScore && game.round > 1 && '👑 '}
+                {p.score === leaderScore && game.round > 1 && <><Icon name="crown" size={14} label="Lowest score" />{' '}</>}
                 {p.name}{p.id === you && <span className="text-amber-300"> ·you</span>}
-                {!p.connected && !p.isBot && <span className="text-red-300"> ⚠</span>}
+                {!p.connected && !p.isBot && <span className="text-red-300"> <Icon name="alert" size={14} label="Disconnected" /></span>}
               </div>
               <div className="text-[0.7rem] text-emerald-200/75 leading-tight flex items-center gap-1.5">
                 <span>{p.handCount} cards</span>
@@ -391,7 +389,7 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
       {/* event ticker */}
       <div className="flex justify-center pb-2">
         <span key={game.lastEvent} className="ticker text-xs bg-black/35 rounded-full px-4 py-1 text-emerald-100/85">
-          {game.lastEvent}
+          {eventText(game.lastEvent)}
         </span>
       </div>
 
@@ -421,14 +419,14 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
       {/* status strip */}
       <div className="turn-status" role="status">
         {game.mustPlayJoker && (
-          <span className="bg-purple-600 rounded-lg px-3 py-1 font-bold shadow">⚠ Play the joker you took before discarding!</span>
+          <span className="bg-purple-600 rounded-lg px-3 py-1 font-bold shadow"><Icon name="alert" size={16} /> Play the joker you took before discarding!</span>
         )}
         {!game.mustPlayJoker && canDraw && !game.buyWindow?.pendingDraw && (
           <span className="text-amber-300 font-extrabold">Your turn! Draw from the deck, or take the {cardLabel(game.discardTop)}.</span>
         )}
         {myTurn && game.buyWindow?.pendingDraw && (
           <span className="text-emerald-200/85">
-            ⏳ Waiting for others to buy or pass…{' '}
+            Waiting for others to buy or pass…{' '}
             {game.buyWindow.paused ? '(paused)'
               : game.buyWindow.untimed ? `(waiting on ${game.buyWindow.waitingOn?.join(', ') || 'everyone'})`
               : `(${Math.max(0, Math.ceil((game.buyWindow.expiresAt - now) / 1000))}s)`}
@@ -439,7 +437,7 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
             {me.hasGoneDown
               ? 'Select a card and click a meld to play it — then discard to end your turn.'
               : game.canGoDownHint
-                ? '✨ You can go down!'
+                ? 'You can go down!'
                 : 'Discard a card to end your turn.'}
           </span>
         )}
@@ -452,7 +450,7 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
       {staging && canAct && !me.hasGoneDown && (
         <div className="glass-panel rounded-2xl p-3 mb-2">
           <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
-            <b>⬇ Going down — {contract.label}</b>
+            <b>Going down — {contract.label}</b>
             <button onClick={() => setStaging(null)} className="bg-emerald-900 hover:bg-emerald-800 rounded-lg px-3 py-1 text-sm">Cancel</button>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -484,7 +482,7 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
               disabled={staging.some((s, i) => s.length < (slotTypes[i] === 'set' ? 3 : 4))}
               className="bg-amber-400 disabled:opacity-40 hover:bg-amber-300 text-black font-black rounded-xl px-7 py-2.5 shadow-lg"
             >
-              Go down! ⬇
+              <Icon name="down" /> Go down
             </button>
           </div>
         </div>
@@ -498,7 +496,7 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
               onClick={openStaging}
               className={`${game.canGoDownHint ? 'bg-amber-400 hover:bg-amber-300' : 'bg-amber-400/60 hover:bg-amber-300'} text-black font-extrabold rounded-xl px-5 py-2 shadow-lg`}
             >
-              ⬇ Go down{game.canGoDownHint ? ' — ready!' : ''}
+              <Icon name="down" /> Go down{game.canGoDownHint ? ' — ready!' : ''}
             </button>
           )}
           {canAct && (
@@ -544,7 +542,7 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
                 />
               </div>
             ))}
-            {hand.length === 0 && <span className="text-emerald-200/50 italic py-4">no cards — nicely done! 🎉</span>}
+            {hand.length === 0 && <span className="text-emerald-200/50 italic py-4">No cards left.</span>}
           </div>
         </div>
       )}
@@ -555,7 +553,7 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
         className="chat-toggle" aria-label={`Table chat${unread ? `, ${unread} unread messages` : ''}`} aria-expanded={showChat}
         title="Chat"
       >
-        Chat{unread > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">{unread}</span>}
+        <Icon name="chat" /> Chat{unread > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">{unread}</span>}
       </button>
       {showChat && (
         <div className="fixed bottom-20 right-4 w-80 max-w-[90vw] z-40">
@@ -612,14 +610,14 @@ function BuySidebar({ game, you, act, now, buyEligible, myTurn, iRequestedBuy, a
   return (
     <div className="buy-sidebar flex flex-col gap-1.5">
       {buyEligible && !iRequestedBuy && !iPassed && (
-        <div className="flex gap-1.5">
+        <div className="buy-actions flex gap-1.5">
           <button
             onClick={() => act('game:buy')}
             disabled={buysLeft === 0}
             className="flex-1 bg-amber-400 disabled:opacity-40 text-black hover:bg-amber-300 font-extrabold rounded-xl px-2 py-2 shadow-lg"
             title={buysLeft === 0 ? 'No buys left this round — they come back next round' : `Buy the top discard (+1 penalty card). ${buysLeft} left this round.`}
           >
-            <BuyToken /> Buy ({buysLeft})
+            Buy ({buysLeft})
           </button>
           <button
             onClick={() => act('game:pass')}
@@ -632,14 +630,14 @@ function BuySidebar({ game, you, act, now, buyEligible, myTurn, iRequestedBuy, a
       )}
       {buyEligible && iRequestedBuy && (
         <>
-          <button onClick={() => act('game:cancelBuy')} className="bg-red-500 text-white font-extrabold rounded-xl px-3 py-2 shadow-lg">✕ Cancel buy</button>
+          <button onClick={() => act('game:cancelBuy')} className="bg-red-500 text-white font-extrabold rounded-xl px-3 py-2 shadow-lg"><Icon name="close" size={16} /> Cancel buy</button>
           <span className="text-[0.7rem] text-amber-200/90 leading-snug">
             You'll get the {cardLabel(game.discardTop)} + a penalty card if {game.players.find((p) => p.id === game.currentPlayerId)?.name} draws from the deck.
           </span>
         </>
       )}
       {buyEligible && iPassed && (
-        <span className="text-center text-[0.75rem] text-emerald-200/70 bg-black/25 rounded-lg py-1.5">✓ passed on the {cardLabel(game.discardTop)}</span>
+        <span className="text-center text-[0.75rem] text-emerald-200/70 bg-black/25 rounded-lg py-1.5"><Icon name="check" size={14} /> Passed on the {cardLabel(game.discardTop)}</span>
       )}
 
       {/* countdown / paused / casual state + pause control */}
@@ -650,14 +648,14 @@ function BuySidebar({ game, you, act, now, buyEligible, myTurn, iRequestedBuy, a
               <div className="buy-bar-track"><div className="buy-bar-fill" style={{ width: `${pct}%` }} /></div>
               <div className="flex items-center justify-between gap-1">
                 <span className="text-[0.7rem] text-amber-200/90">{cardLabel(game.discardTop)} · {Math.ceil(secsLeft)}s</span>
-                <button onClick={() => act('game:pauseBuy')} className="bg-emerald-900/90 hover:bg-emerald-800 rounded-lg px-2 py-1 text-xs font-bold" title="Pause the timer and think">⏸ Pause</button>
+                <button onClick={() => act('game:pauseBuy')} className="bg-emerald-900/90 hover:bg-emerald-800 rounded-lg px-2 py-1 text-xs font-bold" title="Pause the timer and think"><Icon name="pause" size={14} /> Pause</button>
               </div>
             </>
           )}
           {timed && win.paused && (
             <div className="flex items-center justify-between gap-1 bg-purple-900/60 rounded-lg px-2 py-1.5">
-              <span className="text-[0.75rem] font-bold text-purple-200">⏸ paused</span>
-              <button onClick={() => act('game:resumeBuy')} className="bg-amber-400 hover:bg-amber-300 text-black rounded-lg px-2.5 py-1 text-xs font-extrabold">▶ Resume</button>
+              <span className="text-[0.75rem] font-bold text-purple-200">Paused</span>
+              <button onClick={() => act('game:resumeBuy')} className="bg-amber-400 hover:bg-amber-300 text-black rounded-lg px-2.5 py-1 text-xs font-extrabold"><Icon name="play" size={14} /> Resume</button>
             </div>
           )}
           {win.untimed && (
@@ -713,11 +711,11 @@ function LogDrawer({ log, buys, onClose }) {
     <div className="fixed inset-0 bg-black/60 z-50 flex justify-end" onClick={onClose}>
       <div className="glass-panel h-full w-96 max-w-[92vw] flex flex-col rounded-l-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-emerald-800">
-          <b>📜 Game log</b>
-          <button onClick={onClose} aria-label="Close dialog" className="text-emerald-300 hover:text-white text-lg">✕</button>
+          <b><Icon name="history" /> Game log</b>
+          <button onClick={onClose} aria-label="Close dialog" className="text-emerald-300 hover:text-white text-lg"><Icon name="close" /></button>
         </div>
         <div className="px-4 py-3 border-b border-emerald-800/60">
-          <div className="text-xs font-black text-amber-300 mb-1.5 tracking-wide"><BuyToken className="w-4 h-4" /> BUYS THIS GAME</div>
+          <div className="text-xs font-black text-amber-300 mb-1.5 tracking-wide">BUYS THIS GAME</div>
           {buys.length === 0 ? (
             <div className="text-xs text-emerald-200/50 italic">No one has bought a card yet.</div>
           ) : (
@@ -738,7 +736,7 @@ function LogDrawer({ log, buys, onClose }) {
                 : e.type === 'round' ? 'text-emerald-300 font-black pt-2'
                 : 'text-emerald-100/75'
             }>
-              {e.msg}
+              {eventText(e.msg)}
             </div>
           ))}
           <div ref={bottomRef} />
@@ -782,8 +780,8 @@ function Scoreboard({ players, round, onClose }) {
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4" onClick={onClose}>
       <div className="glass-panel rounded-2xl p-5 max-w-lg w-full shadow-2xl overflow-x-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-3">
-          <h2 className="text-lg font-black">🏆 Scoreboard</h2>
-          <button onClick={onClose} aria-label="Close dialog" className="text-emerald-300 hover:text-white text-lg">✕</button>
+          <h2 className="text-lg font-black"><Icon name="scores" /> Scoreboard</h2>
+          <button onClick={onClose} aria-label="Close dialog" className="text-emerald-300 hover:text-white text-lg"><Icon name="close" /></button>
         </div>
         <table className="w-full text-sm">
           <thead>
@@ -814,7 +812,7 @@ function RoundSummary({ summary }) {
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4">
       <div className="glass-panel rounded-2xl p-6 max-w-md w-full shadow-2xl">
         <h2 className="text-xl font-black mb-1">Round {summary.round} over!</h2>
-        <p className="text-emerald-200/85 mb-3">🎉 <b>{summary.winner}</b> went out.</p>
+        <p className="text-emerald-200/85 mb-3"><b>{summary.winner}</b> went out.</p>
         <table className="w-full text-sm">
           <thead>
             <tr className="text-emerald-300/70 text-left">
@@ -839,23 +837,17 @@ function RoundSummary({ summary }) {
 
 function GameOver({ players, onLeave }) {
   const standings = [...players].sort((a, b) => a.score - b.score);
-  const emojis = ['🎉', '☘️', '✨', '🃏', '🎊'];
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 px-4 overflow-hidden">
-      {Array.from({ length: 14 }, (_, i) => (
-        <span key={i} className="confetti" style={{ left: `${(i * 7.3) % 100}%`, animationDelay: `${(i * 0.37) % 2.8}s` }}>
-          {emojis[i % emojis.length]}
-        </span>
-      ))}
       <div className="glass-panel !border-amber-500/50 rounded-3xl p-7 max-w-md w-full shadow-2xl text-center">
-        <div className="text-6xl mb-2">🏆</div>
+        <div className="mb-2"><Icon name="crown" size={34} /></div>
         <h2 className="text-3xl font-black mb-1 text-amber-300">{standings[0].name} wins!</h2>
         <p className="text-emerald-200/70 mb-4">Lowest score after seven rounds — Aunt Peggy would be proud.</p>
         <table className="w-full text-sm mb-5">
           <tbody>
             {standings.map((p, i) => (
               <tr key={p.id} className="border-t border-emerald-800/50">
-                <td className="py-1.5 text-left font-bold">{i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`} {p.name}</td>
+                <td className="py-1.5 text-left font-bold">{i + 1}. {p.name}</td>
                 <td className="py-1.5 text-right text-xs text-emerald-300/70">{p.roundScores.join(' + ')}</td>
                 <td className="py-1.5 text-right font-black">{p.score}</td>
               </tr>
@@ -863,7 +855,7 @@ function GameOver({ players, onLeave }) {
           </tbody>
         </table>
         <button onClick={onLeave} className="bg-amber-400 hover:bg-amber-300 text-black font-black rounded-xl px-8 py-2.5 shadow-lg">
-          Back to lobby
+          <Icon name="leave" /> Back to lobby
         </button>
       </div>
     </div>

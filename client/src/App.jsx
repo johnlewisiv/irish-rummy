@@ -1,11 +1,13 @@
 // Irish Rummy — a family table, with explicit saved-player recovery.
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  socket, call, artUrl, listProfiles, getActiveProfile, createProfile, selectProfile,
+  socket, call, listProfiles, getActiveProfile, createProfile, selectProfile,
   getHelloPayload, rememberRoom, clearCurrentRoom, forgetRoom,
   getConnectionStatus, subscribeConnectionStatus,
 } from './socket.js';
 import GameScreen, { RuleBook } from './GameScreen.jsx';
+import Card from './Card.jsx';
+import Icon from './Icon.jsx';
 
 function readInitialPlayer() {
   try { return { profile: getActiveProfile(), profiles: listProfiles(), error: null }; }
@@ -177,7 +179,7 @@ export default function App() {
   return (
     <div className="app-shell">
       {statusMessage && <div className="connection-banner" role="status">{statusMessage}</div>}
-      {toast && <div className="toast" role="alert"><span>{toast}</span><button onClick={() => setToast(null)} aria-label="Dismiss message">×</button></div>}
+      {toast && <div className="toast" role="alert"><span>{toast}</span><button onClick={() => setToast(null)} aria-label="Dismiss message"><Icon name="close" /></button></div>}
       <div className={blocked ? 'sync-lock' : undefined} aria-busy={blocked || busy}>
         {!signedIn ? (
           <NameScreen name={name} setName={setName} onSubmit={signIn} profiles={profiles} onRecover={recoverProfile} busy={busy || health.recovering} connected={health.connected} storageError={initial.error} />
@@ -203,7 +205,7 @@ function WelcomeFrame({ children, signIn = false }) {
     <main className={`welcome-shell ${signIn ? 'sign-in-shell' : ''}`}>
       <header className="welcome-header"><Brand /><button className="text-button" onClick={() => setShowRules(true)}>How to play</button></header>
       <div className="welcome-grid">
-        <div className="lake-illustration"><img src={artUrl('lake-house-v2.png')} alt="Two chairs waiting on a sunlit dock beside the family lake house" fetchPriority="high" /></div>
+        <div className="lobby-deck" aria-hidden="true"><Card card={{ rank: 'A', suit: 'S' }} /><Card card={{ rank: 'K', suit: 'H' }} /><Card card={{ rank: 'Q', suit: 'C' }} /></div>
         <div className="welcome-content">{children}</div>
       </div>
       {showRules && <RuleBook onClose={() => setShowRules(false)} />}
@@ -214,13 +216,13 @@ function WelcomeFrame({ children, signIn = false }) {
 function NameScreen({ name, setName, onSubmit, profiles, onRecover, busy, connected, storageError }) {
   return (
     <WelcomeFrame signIn>
-      <div className="welcome-intro"><h1>Welcome to <br />the lake.</h1><p>Pull up a chair. Aunt Peggy's game is better together.</p></div>
+      <div className="welcome-intro"><h1>Welcome to <br />the table.</h1><p>Pull up a chair. Aunt Peggy's game is better together.</p></div>
       {profiles.length > 0 && <section className="saved-players" aria-label="Saved players">
         <h2>Pick up where you left off.</h2>
         {profiles.map((profile) => <div className="saved-player" key={profile.token}>
           <button className="profile-button" disabled={busy || !connected} onClick={() => onRecover(profile)}>
             <span className="profile-initial" aria-hidden="true">{(profile.name || '?').slice(0, 1)}</span>
-            <span><strong>Continue as {profile.name || 'saved player'}</strong><small>{profile.currentRoomCode ? `Return to table ${profile.currentRoomCode}` : 'Your saved player'}</small></span><span className="profile-arrow" aria-hidden="true">↗</span>
+            <span><strong>Continue as {profile.name || 'saved player'}</strong><small>{profile.currentRoomCode ? `Return to table ${profile.currentRoomCode}` : 'Your saved player'}</small></span><Icon className="profile-arrow" name="arrowRight" />
           </button>
           {profile.rooms.length > 1 && <details className="saved-tables"><summary>Other saved tables</summary>{profile.rooms.filter((r) => r.code !== profile.currentRoomCode).map((r) => <button className="text-button" key={r.code} disabled={busy || !connected} onClick={() => onRecover(profile, r.code)}>{r.name} · {r.code}</button>)}</details>}
         </div>)}
@@ -267,7 +269,7 @@ function LobbyScreen({ name, rooms, onCreate, onJoin, onCloseRoom, onRefresh, on
           </div>
         </li>)}</ul>}
       </section>
-      <button onClick={onQuickPlay} className="text-button brass-link practice-link" disabled={busy}>Practice with bots <span aria-hidden="true">↗</span></button>
+      <button onClick={onQuickPlay} className="text-button brass-link practice-link" disabled={busy}>Practice with bots <Icon name="arrowRight" /></button>
     </WelcomeFrame>
   );
 }

@@ -1,3 +1,5 @@
+> Superseded by [the classic card-room revision](classic/README.md) after feedback on the icons, cards, and background. This file preserves the first refresh for reference.
+
 # Irish Rummy refresh — September 2026
 
 ## Outcome and verification
