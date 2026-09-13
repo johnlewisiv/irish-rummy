@@ -6,9 +6,13 @@
   "scripts": {
     "build": "cd client && npm install && npm run build && cd ../server && npm install",
     "start": "node server/src/index.js",
-    "test": "npm --prefix server test"
+    "test": "npm --prefix server test && npm --prefix client test && node --test tests/database.test.js tests/socket-recovery.test.mjs",
+    "start:configured": "node --env-file=.env server/src/index.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
   }
 }

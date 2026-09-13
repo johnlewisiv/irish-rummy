@@ -1,4 +1,5 @@
 node_modules/
+.runtime-v2/
 client/node_modules/
 server/node_modules/
 client/dist/
@@ -8,6 +9,8 @@ client/vite.config.js.timestamp-*.mjs
 .DS_Store
 .env
 .env.*
+!.env.example
+server/.data/
 *.log
 npm-debug.log*
 yarn-debug.log*

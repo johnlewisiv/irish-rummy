@@ -7,10 +7,18 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node test/rules.test.js && node test/engine.test.js && node test/rooms.test.js && node test/persistence.test.js && node test/window.test.js && node test/simulate.js"
+    "test": "node test/rules.test.js && node test/engine.test.js && node test/rooms.test.js && node test/persistence.test.js && node test/durable.test.js && node test/window.test.js && node test/simulate.js && node --test test/accounts.test.js",
+    "import:state": "node scripts/import-state.js"
   },
   "dependencies": {
     "express": "^4.19.2",
+    "pg": "^8.23.0",
     "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.3"
+  },
+  "overrides": {
+    "qs": "^6.16.0"
   }
 }
