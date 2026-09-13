@@ -3,12 +3,12 @@
 import { io } from 'socket.io-client';
 export {
   getToken, getSavedName, saveName, listProfiles, getActiveProfile, selectProfile,
-  createProfile, getHelloPayload, rememberRoom, clearCurrentRoom, forgetRoom,
+  createProfile, getHelloPayload, rememberRoom, clearCurrentRoom, forgetRoom, markProfileClaimed,
 } from './session.js';
 
 // Works whether the app is served at / or at /rummy/ behind a proxy.
-const basePath = new URL('.', window.location.href).pathname.replace(/\/$/, '');
-export const socket = io({ path: `${basePath}/socket.io` });
+export const basePath = new URL('.', window.location.href).pathname.replace(/\/$/, '');
+export const socket = io({ path: `${basePath}/socket.io`, autoConnect: false });
 
 let helloAttempt = 0;
 let status = {
@@ -32,6 +32,13 @@ export function subscribeConnectionStatus(listener) {
   statusListeners.add(listener);
   listener(getConnectionStatus());
   return () => statusListeners.delete(listener);
+}
+
+/** Account boundaries invalidate in-flight receipts and remove the old socket. */
+export function resetConnection() {
+  helloAttempt += 1;
+  socket.disconnect();
+  setStatus({ connected: false, sessionReady: false, recovering: false, message: null });
 }
 
 socket.on('connect', () => {
@@ -75,12 +82,15 @@ export function call(event, payload = {}) {
         // An unacknowledged move might already have committed. A new hello
         // fetches the authoritative saved state; the move itself is not retried.
         if (event !== 'rooms:list' && socket.connected) socket.disconnect().connect();
-        return reject(new Error('No confirmation received. Reconnecting to check your saved game; your action will not be repeated automatically.'));
+        const error = new Error('No confirmation received. Reconnecting to check your saved game; your action will not be repeated automatically.');
+        error.uncertain = event !== 'hello' && event !== 'rooms:list' && event !== 'profile:get';
+        return reject(error);
       }
       if (res?.error) {
         if (event === 'hello') setStatus({ sessionReady: false, recovering: false, message: res.error });
         const error = new Error(res.error);
         error.retryable = Boolean(res.retryable);
+        error.code = res.code;
         return reject(error);
       }
       if (event === 'hello') setStatus({ sessionReady: true, recovering: false });

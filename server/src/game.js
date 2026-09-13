@@ -3,6 +3,7 @@
 // always contain exactly the cards built by buildDeck(). assertDeckIntegrity()
 // verifies this after every action.
 
+import { randomUUID } from 'node:crypto';
 import { buildDeck, shuffle, cardPoints } from './deck.js';
 import {
   CONTRACTS, TOTAL_ROUNDS, validateGoDown, validateStraight,
@@ -65,6 +66,9 @@ export class Game {
     this.buyWindowMs = opts.buyWindowMs !== undefined
       ? opts.buyWindowMs
       : Number(process.env.BUY_WINDOW_MS ?? 8000);
+    this.buyDecisionId = null;
+    this.buyDecisionClosed = false;
+    this.buyReceipts = {};
     this.buyWindow = null; // { expiresAt, timer, pendingDraw, paused, remainingMs }
     this.maxBuysPerRound = opts.maxBuysPerRound ?? 3; // house rule: 3 buys each per round
     this.buysUsed = {}; // playerId -> buys spent THIS ROUND (resets every deal)
@@ -133,7 +137,11 @@ export class Game {
     game.buyRequests = clonePlain(snapshot.buyRequests, []);
     game.buyPasses = new Set(snapshot.buyPasses || []);
     game.buyWindowMs = snapshot.buyWindowMs !== undefined ? snapshot.buyWindowMs : Number(process.env.BUY_WINDOW_MS ?? 8000);
+    game.buyDecisionId = snapshot.buyDecisionId || (game.phase === 'playing' && game.turnPhase === 'draw' ? randomUUID() : null);
+    game.buyDecisionClosed = !!snapshot.buyDecisionClosed;
+    game.buyReceipts = clonePlain(snapshot.buyReceipts, {});
     game.buyWindow = snapshot.buyWindow ? {
+      id: game.buyDecisionId,
       expiresAt: null,
       timer: null,
       pendingDraw: snapshot.buyWindow.pendingDraw || null,
@@ -189,14 +197,18 @@ export class Game {
       buyRequests: this.buyRequests,
       buyPasses: [...this.buyPasses],
       buyWindowMs: this.buyWindowMs,
+      buyDecisionId: this.buyDecisionId,
+      buyDecisionClosed: this.buyDecisionClosed,
+      buyReceipts: this.buyReceipts,
       buyWindow: this.buyWindow ? {
+        id: this.buyDecisionId,
         pendingDraw: this.buyWindow.pendingDraw || null,
         paused: !!this.buyWindow.paused,
         remainingMs: this.buyWindow.paused
           ? (this.buyWindow.remainingMs ?? null)
           : this.buyWindow.expiresAt
             ? Math.max(1000, this.buyWindow.expiresAt - Date.now())
-            : null,
+            : (this.buyWindow.remainingMs ?? null),
       } : null,
       maxBuysPerRound: this.maxBuysPerRound,
       buysUsed: this.buysUsed,
@@ -264,7 +276,7 @@ export class Game {
     const delay = Math.max(1000, w.remainingMs || this.buyWindowMs);
     w.expiresAt = Date.now() + delay;
     w.timer = this._timer(() => {
-      this._closeBuyWindow(true);
+      this._closeBuyWindow(true, true);
       this.onChange();
     }, delay);
   }
@@ -314,6 +326,7 @@ export class Game {
     if (from === 'discard') {
       if (this.discardPile.length === 0) throw new Err('Discard pile is empty.');
       // The current player has first priority — taking the card voids all buys.
+      this._recordBuyOutcome('taken', p.id);
       this._closeBuyWindow(false);
       this.buyRequests = [];
       this.buyPasses = new Set();
@@ -348,7 +361,7 @@ export class Game {
 
   /** Out-of-turn buy request for the top discard (resolved when current player draws from deck). */
   requestBuy(playerId) {
-    if (this.phase !== 'playing' || this.turnPhase !== 'draw') throw new Err('No card can be bought right now.');
+    if (this.phase !== 'playing' || this.turnPhase !== 'draw' || this.buyDecisionClosed) throw new Err('The chance to buy this card has ended.');
     if (playerId === this.currentPlayer().id) throw new Err("It's your turn — just take the card.");
     if (this.discardPile.length === 0) throw new Err('Nothing to buy.');
     const p = this.getPlayer(playerId);
@@ -367,19 +380,38 @@ export class Game {
 
   /** Explicitly pass on the top discard (closes the buy window faster). */
   passBuy(playerId) {
-    if (this.phase !== 'playing' || this.turnPhase !== 'draw') return this.onChange();
+    if (this.phase !== 'playing' || this.turnPhase !== 'draw' || this.buyDecisionClosed) throw new Err('The chance to pass on this card has ended.');
     if (playerId === this.currentPlayer().id) throw new Err("It's your turn — draw a card.");
     const p = this.getPlayer(playerId);
     if (!p) throw new Err('Not in this game.');
     this.buyRequests = this.buyRequests.filter((id) => id !== playerId);
     this.buyPasses.add(playerId);
+    this.buyReceipts[playerId] = { id: randomUUID(), decisionId: this.buyDecisionId, outcome: 'passed', card: clonePlain(this.top(), null), at: Date.now() };
     this._maybeCloseBuyWindow();
     this.onChange();
   }
 
   cancelBuy(playerId) {
+    if (this.phase !== 'playing' || this.turnPhase !== 'draw' || this.buyDecisionClosed) throw new Err('The chance to change this decision has ended.');
     this.buyRequests = this.buyRequests.filter((id) => id !== playerId);
     this.onChange();
+  }
+
+  requireBuyDecision(decisionId) {
+    if (!decisionId) { const error = new Err('Refresh Irish Rummy before playing so your choices use the current table.'); error.code = 'CLIENT_REFRESH_REQUIRED'; throw error; }
+    if (decisionId !== this.buyDecisionId) throw new Err('The table has moved on. Use the current card and try again.');
+  }
+
+  _recordBuyOutcome(kind, buyerId = null) {
+    for (const player of this.players) {
+      if (player.id === this.currentPlayer().id) continue;
+      const requested = this.buyRequests.includes(player.id);
+      const passed = this.buyPasses.has(player.id);
+      this.buyReceipts[player.id] = { id: randomUUID(), decisionId: this.buyDecisionId,
+        outcome: kind === 'bought' && player.id === buyerId ? 'bought' : passed ? 'passed' : requested && kind === 'bought' ? 'not-bought' : kind === 'taken' ? 'taken' : 'expired',
+        buyerId, card: clonePlain(this.top(), null), at: Date.now() };
+    }
+    this.buyDecisionClosed = true;
   }
 
   top() { return this.discardPile[this.discardPile.length - 1]; }
@@ -388,6 +420,8 @@ export class Game {
 
   /** Open a buy/pass window for the fresh top discard. Bots answer instantly. */
   _openBuyWindow() {
+    this.buyDecisionId = randomUUID();
+    this.buyDecisionClosed = false;
     this.buyRequests = [];
     this.buyPasses = new Set();
     if (this.buyWindowMs === null || this.buyWindowMs < 0 || !this.top()) return;
@@ -397,18 +431,18 @@ export class Game {
       else this.buyPasses.add(b.id);
     }
     // Only wait if there are connected humans who still need to decide.
-    if (!others.some((p) => !p.isBot && p.connected)) return;
+    if (!others.some((p) => !p.isBot && p.connected && (this.buysUsed[p.id] || 0) < this.maxBuysPerRound)) return;
     if (this.buyWindowMs === 0) {
       // Casual mode: no countdown — the window stays open until everyone
       // has bought or passed (or the current player takes the discard).
-      this.buyWindow = { expiresAt: null, timer: null, pendingDraw: null, paused: false };
+      this.buyWindow = { id: this.buyDecisionId, expiresAt: null, timer: null, pendingDraw: null, paused: false };
       return;
     }
     const timer = this._timer(() => {
-      this._closeBuyWindow(true);
+      this._closeBuyWindow(true, true);
       this.onChange();
     }, this.buyWindowMs);
-    this.buyWindow = { expiresAt: Date.now() + this.buyWindowMs, timer, pendingDraw: null, paused: false };
+    this.buyWindow = { id: this.buyDecisionId, expiresAt: Date.now() + this.buyWindowMs, timer, pendingDraw: null, paused: false };
   }
 
   /** Pause the buy countdown (any player — think as long as you like). */
@@ -422,7 +456,7 @@ export class Game {
     w.paused = true;
     w.remainingMs = Math.max(1000, w.expiresAt - Date.now());
     w.expiresAt = null;
-    this._emit(`⏸ ${p.name} paused the buy timer.`);
+    this._emit(`${p.name} paused the buy timer.`);
     this.onChange();
   }
 
@@ -435,10 +469,10 @@ export class Game {
     w.paused = false;
     w.expiresAt = Date.now() + w.remainingMs;
     w.timer = this._timer(() => {
-      this._closeBuyWindow(true);
+      this._closeBuyWindow(true, true);
       this.onChange();
     }, w.remainingMs);
-    this._emit(`▶ ${p.name} resumed the buy timer.`);
+    this._emit(`${p.name} resumed the buy timer.`);
     this.onChange();
   }
 
@@ -448,16 +482,21 @@ export class Game {
   _maybeCloseBuyWindow() {
     if (!this.buyWindow) return;
     const waiting = this.players.filter((p, i) =>
-      i !== this.currentIndex && !p.isBot && p.connected && !this._hasResponded(p));
+      i !== this.currentIndex && !p.isBot && p.connected && (this.buysUsed[p.id] || 0) < this.maxBuysPerRound && !this._hasResponded(p));
     if (waiting.length === 0) this._closeBuyWindow(true);
   }
 
   /** @param {boolean} execute run the held deck draw (false when voiding). */
-  _closeBuyWindow(execute) {
+  _closeBuyWindow(execute, expired = false) {
     if (!this.buyWindow) return;
     this._cancelTimer(this.buyWindow.timer);
     const held = this.buyWindow.pendingDraw;
     this.buyWindow = null;
+    // Closing a timed window freezes decisions even while its player chooses a pile.
+    if (execute && expired) {
+      this.buyDecisionClosed = true;
+      for (const p of this.players) if (p.id !== this.currentPlayer().id && !this._hasResponded(p)) this.buyReceipts[p.id] = { id: randomUUID(), decisionId: this.buyDecisionId, outcome: 'expired', card: clonePlain(this.top(), null), at: Date.now() };
+    }
     if (execute && held) this._performDeckDraw(this.getPlayer(held));
   }
 
@@ -466,9 +505,13 @@ export class Game {
     if (this.discardPile.length === 0) { this.buyRequests = []; return; }
     const card = this.top();
     const n = this.players.length;
+    let buyerId = null;
     for (let k = 1; k < n; k++) {
       const p = this.players[(this.currentIndex + k) % n];
       if (this.buyRequests.includes(p.id) && (this.buysUsed[p.id] || 0) < this.maxBuysPerRound) {
+        buyerId = p.id;
+        // Receipts refer to the discard before it leaves the pile.
+        this._recordBuyOutcome('bought', buyerId);
         this.discardPile.pop();
         p.hand.push(card);
         this._ensureDrawPile();
@@ -476,10 +519,11 @@ export class Game {
         this.buysUsed[p.id] = (this.buysUsed[p.id] || 0) + 1;
         const left = this.maxBuysPerRound - this.buysUsed[p.id];
         this.buys.push({ round: this.round, name: p.name, card: cardName(card) });
-        this._emit(`💰 ${p.name} bought the ${cardName(card)} (+1 penalty card, ${left} buy${left === 1 ? '' : 's'} left this round).`, 'buy');
+        this._emit(`${p.name} bought the ${cardName(card)} (+1 penalty card, ${left} buy${left === 1 ? '' : 's'} left this round).`, 'buy');
         break; // only the highest-priority buyer gets it
       }
     }
+    if (!buyerId) this._recordBuyOutcome('expired');
     this.buyRequests = [];
     this.buyPasses = new Set();
   }
@@ -737,14 +781,19 @@ export class Game {
       tableMelds: this.tableMelds,
       buyRequests: this.buyRequests,
       buyPasses: [...this.buyPasses],
+      buyDecisionId: this.buyDecisionId,
+      buyDecisionClosed: this.buyDecisionClosed,
+      buyReceipt: this.buyReceipts[viewerId] || null,
+      pendingDraw: !!this.buyWindow?.pendingDraw,
       buyWindow: this.buyWindow ? {
+        id: this.buyDecisionId,
         expiresAt: this.buyWindow.expiresAt,
         windowMs: this.buyWindowMs,
         untimed: this.buyWindowMs === 0,
         paused: !!this.buyWindow.paused,
         pendingDraw: !!this.buyWindow.pendingDraw,
         waitingOn: this.players
-          .filter((p, i) => i !== this.currentIndex && !p.isBot && p.connected && !this._hasResponded(p))
+          .filter((p, i) => i !== this.currentIndex && !p.isBot && p.connected && (this.buysUsed[p.id] || 0) < this.maxBuysPerRound && !this._hasResponded(p))
           .map((p) => p.name),
       } : null,
       maxBuysPerRound: this.maxBuysPerRound,

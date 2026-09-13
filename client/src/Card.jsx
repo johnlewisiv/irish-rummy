@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { artUrl } from './socket.js';
 
 const SUIT_GLYPH = { S: '♠', H: '♥', D: '♦', C: '♣' };
 const SUIT_NAME = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
@@ -44,14 +45,19 @@ export default function Card({ card, small, big, selected, draggable, onClick, o
 
 export function cardLabel(card) { return !card ? '' : card.joker ? 'Joker' : `${card.rank}${SUIT_GLYPH[card.suit]}`; }
 
-// Keep saved avatar identifiers compatible with existing family games.
-export const ALL_AVATARS = ['avatar-loon.png', 'avatar-fox.png', 'avatar-chipmunk.png', 'avatar-bear.png', 'avatar-mallard.png', 'avatar-trout.png'];
-const COLORS = ['blue', 'brick', 'sage', 'ochre', 'plum', 'teal'];
+export const AVATAR_OPTIONS = ['Canoe', 'Dock', 'Cabin', 'Lantern', 'Sailboat', 'Coffee'].map((label, index) => ({ id: `lake-${label.toLowerCase()}`, label, position: `${(index % 3) * 50}% ${Math.floor(index / 3) * 100}%` }));
+export const ALL_AVATARS = AVATAR_OPTIONS.map(({ id }) => id);
+const LEGACY_AVATARS = ['avatar-loon.png', 'avatar-fox.png', 'avatar-chipmunk.png', 'avatar-bear.png', 'avatar-mallard.png', 'avatar-trout.png'];
 function nameHash(name) { let h = 0; for (const c of String(name || 'Player')) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h; }
 
-export function Avatar({ name = 'Player', isBot, avatar, size = 2.6, selected, onClick }) {
-  const color = COLORS[Math.max(0, avatar ? ALL_AVATARS.indexOf(avatar) : nameHash(name) % COLORS.length)];
-  const initials = String(name).trim().split(/\s+/).slice(0, 2).map((word) => word[0] || '').join('').toUpperCase() || '?';
-  const disc = <span className={`player-monogram monogram-${color} ${selected ? 'monogram-selected' : ''}`} style={{ width: `${size}rem`, height: `${size}rem`, fontSize: `${size * .36}rem` }} role={onClick ? undefined : 'img'} aria-label={onClick ? undefined : `${name}${isBot ? ', bot' : ''}`}>{initials}</span>;
-  return onClick ? <button className="avatar-button" type="button" onClick={onClick} aria-label={`Choose ${color} player color`} aria-pressed={Boolean(selected)}>{disc}</button> : disc;
+export function Avatar({ name = 'Player', isBot, avatar, avatarId, photoUrl, size = 2.6, selected, onClick }) {
+  const id = avatarId || avatar;
+  const index = ALL_AVATARS.includes(id) ? ALL_AVATARS.indexOf(id) : LEGACY_AVATARS.includes(id) ? LEGACY_AVATARS.indexOf(id) : nameHash(name) % ALL_AVATARS.length;
+  const option = AVATAR_OPTIONS[index];
+  const [failedPhoto, setFailedPhoto] = useState(null);
+  const photo = /^https:\/\//.test(photoUrl || '') && failedPhoto !== photoUrl ? photoUrl : null;
+  const disc = <span className={`lake-avatar ${selected ? 'avatar-selected' : ''}`} style={{ width: `${size}rem`, height: `${size}rem`, backgroundImage: `url(${artUrl('lake-avatars-retro-v2.png')})`, backgroundPosition: option.position }} role={onClick ? undefined : 'img'} aria-label={onClick ? undefined : `${name}${isBot ? ', bot' : ''}`}>
+    {photo && <img src={photo} alt="" referrerPolicy="no-referrer" onError={() => setFailedPhoto(photoUrl)} />}
+  </span>;
+  return onClick ? <button className="avatar-button" type="button" onClick={onClick} aria-label={`Choose ${option.label.toLowerCase()} avatar`} aria-pressed={Boolean(selected)}>{disc}</button> : disc;
 }

@@ -18,6 +18,9 @@ test('Postgres schema protects and restores games and rejects stale writers', as
     const migration = await readFile(new URL('../server/db/001-game-state.sql', import.meta.url), 'utf8');
     await db.exec(migration);
     await db.exec(migration); // Deployment may safely reapply it.
+    const accountsMigration = await readFile(new URL('../server/db/002-account-state.sql', import.meta.url), 'utf8');
+    await db.exec(accountsMigration);
+    await db.exec(accountsMigration);
     for (const role of ['anon', 'authenticated']) {
       const permission = await db.query(`SELECT
         has_schema_privilege($1, 'irish_rummy_private', 'USAGE') AS schema_access,
@@ -27,7 +30,7 @@ test('Postgres schema protects and restores games and rejects stale writers', as
     }
     const rls = await db.query("SELECT relrowsecurity FROM pg_class WHERE oid = 'irish_rummy_private.game_state'::regclass");
     assert.equal(rls.rows[0].relrowsecurity, true);
-    for (const snapshot of [{}, {version: 1}, {version: 99, rooms: []}, {version: null, rooms: []}, {version: '1', rooms: []}, {version: 1, rooms: {}}]) {
+    for (const snapshot of [{}, {version: 1}, {version: 99, rooms: []}, {version: null, rooms: []}, {version: '1', rooms: []}, {version: 1, rooms: {}}, {version: 3, rooms: []}, {version: 3, rooms: [], accounts: {}}]) {
       await assert.rejects(db.query('INSERT INTO irish_rummy_private.game_state VALUES ($1, 1, $2, now())',
         ['invalid', JSON.stringify(snapshot)]), /check constraint/);
     }

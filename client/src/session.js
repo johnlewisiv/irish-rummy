@@ -102,7 +102,7 @@ export function createSessionStore({ localStorage, sessionStorage, randomToken, 
     return copy(profile);
   }
 
-  function createProfile(name) {
+  function createProfile(name, { practiceOnly = false } = {}) {
     const n = cleanName(name);
     if (!n) throw new Error('Enter a name for your player.');
     const data = migrate();
@@ -111,6 +111,7 @@ export function createSessionStore({ localStorage, sessionStorage, randomToken, 
     const profile = {
       token, name: n, currentRoomCode: null, roomSelectionKnown: true,
       rooms: [], lastUsedAt: now(),
+      ...(practiceOnly ? { practiceOnly: true } : {}),
     };
     data.profiles.push(profile);
     // Write the recovery identity durably before making it active in this tab.
@@ -175,8 +176,18 @@ export function createSessionStore({ localStorage, sessionStorage, randomToken, 
     save(data);
   }
 
+  function markProfileClaimed(token, accountId) {
+    const data = migrate();
+    const profile = data.profiles.find((entry) => entry.token === token);
+    if (!profile) throw new Error('That older player was not found on this browser.');
+    if (!accountId) throw new Error('Sign in before connecting an older player.');
+    // This is only a local hint. The server verifies ownership on every import.
+    profile.claimedBy = accountId;
+    save(data);
+  }
+
   return { listProfiles, getActiveProfile, selectProfile, createProfile, getToken, getSavedName, saveName,
-    getHelloPayload, rememberRoom, clearCurrentRoom, forgetRoom };
+    getHelloPayload, rememberRoom, clearCurrentRoom, forgetRoom, markProfileClaimed };
 }
 
 let browserStore;
@@ -206,3 +217,4 @@ export const getHelloPayload = (...args) => getBrowserStore().getHelloPayload(..
 export const rememberRoom = (...args) => getBrowserStore().rememberRoom(...args);
 export const clearCurrentRoom = (...args) => getBrowserStore().clearCurrentRoom(...args);
 export const forgetRoom = (...args) => getBrowserStore().forgetRoom(...args);
+export const markProfileClaimed = (...args) => getBrowserStore().markProfileClaimed(...args);

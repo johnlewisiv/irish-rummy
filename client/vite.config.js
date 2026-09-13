@@ -15,6 +15,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/socket.io': { target: 'http://localhost:3050', ws: true },
+      '/auth': { target: 'http://localhost:3050' },
     },
   },
 });

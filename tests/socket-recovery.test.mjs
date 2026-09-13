@@ -49,7 +49,7 @@ async function fixture(t) {
   async function start() {
     debug('starting local test server');
     logs = '';
-    child = spawn(process.execPath, ['server/src/index.js'], {
+    child = spawn(process.execPath, ['--input-type=module', '-e', "import { createGameServer } from './server/src/index.js'; const server = await createGameServer({ allowLegacySessions: true }); await server.listen();"], {
       cwd: root,
       env: {
         ...process.env, NODE_ENV: 'test', PORT: String(port), BASE_PATH: '',
@@ -239,6 +239,7 @@ test('actual client rejects offline and pre-recovery moves without replay; faile
   globalThis.window = { location: globalThis.location };
   const client = await import('../client/src/socket.js');
   const host = f.attach(client.socket);
+  client.socket.connect(); // App starts the socket after loading account configuration.
   t.after(() => {
     client.socket.disconnect();
     if (originalWindow === undefined) delete globalThis.window; else globalThis.window = originalWindow;
@@ -351,7 +352,7 @@ test('an uncertain committed room closure removes every stale client attachment 
     },
     async close() {},
   };
-  const instance = await createGameServer({ stateStore });
+  const instance = await createGameServer({ stateStore, allowLegacySessions: true });
   const clients = [];
   const events = [];
   t.after(async () => {

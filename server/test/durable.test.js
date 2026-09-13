@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { DurableRooms, SavingUnavailable } from '../src/durable-rooms.js';
 import { JsonStateStore } from '../src/persistence.js';
+import { RoomManager } from '../src/rooms.js';
 
 const copy = (value) => JSON.parse(JSON.stringify(value));
 class TestStore {
@@ -88,6 +89,54 @@ assert.equal(restored.game.buyWindow.timer, null);
 restored.createdAt = 1; restored.updatedAt = 1;
 assert.equal(restarted.rooms.sweep(), false, 'old family table survives until host closes it');
 await restarted.close();
+
+// The importer and every startup normalize snapshots with timers suspended.
+// Preserve an exact saved countdown through v2 -> v3 import and repeated startup
+// rewrites; neither process should reset an unpaused window to its full duration.
+for (const paused of [false, true]) {
+  const legacy = copy(before);
+  legacy.version = 2;
+  delete legacy.accounts;
+  const legacyRoom = legacy.rooms[0];
+  delete legacyRoom.visibility;
+  delete legacyRoom.members;
+  delete legacyRoom.inviteToken;
+  legacyRoom.buyWindowMs = 30000;
+  legacyRoom.game.buyWindowMs = 30000;
+  legacyRoom.game.buyWindow.paused = paused;
+  legacyRoom.game.buyWindow.remainingMs = 12345;
+  legacyRoom.game.buyWindow.pendingDraw = legacyRoom.game.players[legacyRoom.game.currentIndex].id;
+
+  const importedRooms = new RoomManager();
+  importedRooms.loadSnapshot(legacy, () => {}, () => ({ resumeRuntime: false }));
+  const importedSnapshot = importedRooms.toSnapshot();
+  assert.equal(importedSnapshot.version, 3, 'legacy import upgrades the snapshot version');
+  assert.equal(importedSnapshot.rooms[0].game.buyWindow.remainingMs, 12345, 'import preserves the saved countdown');
+  assert.equal(importedSnapshot.rooms[0].game.buyWindow.pendingDraw, legacyRoom.game.buyWindow.pendingDraw, 'import preserves the held draw');
+  for (const room of importedRooms.rooms.values()) room.game?.destroy();
+
+  const importedStore = new TestStore();
+  importedStore.value = importedSnapshot;
+  for (let restart = 0; restart < 2; restart++) {
+    const reopened = new DurableRooms(importedStore);
+    try {
+      await reopened.initialize();
+      assert.deepEqual(importedStore.value.rooms[0].game, importedSnapshot.rooms[0].game, 'startup rewrite preserves every game field including timer state');
+      const game = reopened.rooms.get(legacyRoom.code).game;
+      assert.equal(game.buyWindow.timer, null, 'startup does not run the timer before anyone returns');
+      if (!paused) {
+        const beforeResume = Date.now();
+        game.resumeRuntime();
+        const afterResume = Date.now();
+        assert.ok(game.buyWindow.expiresAt >= beforeResume + 12345 && game.buyWindow.expiresAt <= afterResume + 12345, 'returning player resumes the saved time rather than a fresh 30 seconds');
+      } else {
+        game.resumeRuntime();
+        assert.equal(game.buyWindow.timer, null, 'a manually paused countdown stays paused on return');
+      }
+    } finally { await reopened.close(); }
+  }
+}
+console.log('legacy import and repeated startup preserve paused and unpaused countdowns');
 
 // Timer callbacks wait behind a pending save, just like player actions.
 const timerStore = new TestStore();

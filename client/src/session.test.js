@@ -52,6 +52,18 @@ test('names do not replace or claim an existing player identity', () => {
   assert.equal(browser(local).listProfiles().length, 2);
 });
 
+test('claiming an older profile preserves its original token and every saved game', () => {
+  const local = storage();
+  const session = browser(local);
+  const profile = session.createProfile('John');
+  session.rememberRoom(room('FIRST'));
+  session.markProfileClaimed(profile.token, 'verified-account');
+  const saved = session.listProfiles()[0];
+  assert.equal(saved.token, profile.token);
+  assert.equal(saved.claimedBy, 'verified-account');
+  assert.deepEqual(saved.rooms.map((entry) => entry.code), ['FIRST']);
+});
+
 test('existing tab tokens migrate without changing the token or guessing a room', () => {
   const local = storage({ 'rummy.name': 'John' });
   const tab = storage({ 'rummy.token': 'original-secret' });
