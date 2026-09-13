@@ -151,3 +151,23 @@ import { Game } from '../src/game.js';
 }
 
 console.log('window.test.js: all assertions passed ✔');
+
+// Expired callbacks may already be queued behind a database save. Closing their
+// old window must cancel them even if a new turn has opened another window.
+{
+  const pending = [];
+  const g = new Game([{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }], () => {},
+    { buyWindowMs: 30, runMutation: (fn) => pending.push(fn) });
+  g.startNextRound();
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(pending.length, 1, 'old timer callback queued');
+  const current = g.currentPlayer();
+  g.draw(current.id, 'discard');
+  g.discard(current.id, current.hand[0].id);
+  const freshWindow = g.buyWindow;
+  pending.shift()();
+  assert.equal(g.buyWindow, freshWindow, 'stale queued expiry cannot close next turn window');
+  assert.ok(g.buyWindow, 'fresh window remains open');
+  g.destroy();
+  console.log('queued stale timer cancellation ✔');
+}

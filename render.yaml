@@ -6,6 +6,8 @@ services:
     buildCommand: cd client && npm install && npm run build && cd ../server && npm install
     startCommand: node server/src/index.js
     autoDeploy: true
+    healthCheckPath: /healthz
+    numInstances: 1
     disk:
       name: game-state
       mountPath: /var/data
@@ -15,3 +17,11 @@ services:
         value: 20
       - key: ROOM_STATE_FILE
         value: /var/data/irish-rummy-state.json
+      # Set the new project's connection URL in Render's secret environment UI
+      # only after importing the preserved disk snapshot during maintenance.
+      - key: IRISH_RUMMY_DATABASE_URL
+        sync: false
+      - key: IRISH_RUMMY_STATE_KEY
+        value: family-games
+      - key: IRISH_RUMMY_DATABASE_CA_FILE
+        value: server/certs/supabase-prod-ca-2021.crt

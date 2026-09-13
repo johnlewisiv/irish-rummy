@@ -1,8 +1,10 @@
 // Card.jsx — playing card faces, backs, avatars (lake-house art edition).
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { artUrl } from './socket.js';
 
 const SUIT_GLYPH = { S: '♠', H: '♥', D: '♦', C: '♣' };
+const SUIT_NAME = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
+const RANK_NAME = { A: 'Ace', K: 'King', Q: 'Queen', J: 'Jack' };
 
 export default function Card({ card, small, big, selected, draggable, onClick, onDragStart, onDragEnd, ghost, title }) {
   if (!card) return <div className={`card-back ${small ? 'small' : ''} ${big ? 'big' : ''}`} />;
@@ -23,6 +25,11 @@ export default function Card({ card, small, big, selected, draggable, onClick, o
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       title={title}
+      role={onClick ? 'button' : 'img'}
+      tabIndex={onClick ? 0 : undefined}
+      aria-label={card.joker ? 'Joker' : `${RANK_NAME[card.rank] || card.rank} of ${SUIT_NAME[card.suit]}`}
+      aria-pressed={onClick ? Boolean(selected) : undefined}
+      onKeyDown={onClick ? (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onClick(event); } } : undefined}
     >
       {card.joker ? (
         <>
@@ -71,43 +78,23 @@ export const ALL_AVATARS = [
 ];
 
 function nameHash(name) {
+  name = String(name || 'Player');
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
   return h;
 }
 
 /** Illustrated avatar with a graceful fall-back to a colored initials disc. */
-export function Avatar({ name, isBot, avatar, size = 2.6, selected, onClick }) {
+export function Avatar({ name = 'Player', isBot, avatar, size = 2.6, selected, onClick }) {
   const [broken, setBroken] = useState(false);
   const file = avatar || ALL_AVATARS[nameHash(name) % ALL_AVATARS.length];
-  const h = nameHash(name) % 360;
-  if (broken) {
-    return (
-      <div
-        className="rounded-full flex items-center justify-center font-black shadow-md shrink-0"
-        style={{
-          width: `${size}rem`, height: `${size}rem`, fontSize: `${size * 0.42}rem`,
-          background: `linear-gradient(145deg, hsl(${h} 55% 48%), hsl(${h} 60% 32%))`,
-          border: '2px solid rgba(255,255,255,0.35)',
-        }}
-      >
-        {isBot ? '🤖' : name.slice(0, 2).toUpperCase()}
-      </div>
-    );
-  }
-  return (
-    <img
-      src={artUrl(file)}
-      alt={name}
-      draggable={false}
-      onError={() => setBroken(true)}
-      onClick={onClick}
-      className={`rounded-full shadow-md shrink-0 object-cover ${onClick ? 'cursor-pointer hover:scale-105 transition-transform' : ''}`}
-      style={{
-        width: `${size}rem`, height: `${size}rem`,
-        border: selected ? '3px solid #fbbf24' : '2px solid rgba(245, 235, 210, 0.55)',
-        background: `hsl(${h} 35% 25%)`,
-      }}
-    />
-  );
+  useEffect(() => setBroken(false), [file]);
+  const style = {
+    width: `${size}rem`, height: `${size}rem`, flexShrink: 0,
+    border: selected ? '3px solid #af8e50' : '1px solid #bbbca9',
+    background: '#dfe5d6', borderRadius: '50%', objectFit: 'cover',
+  };
+  const portrait = broken ? <span style={{ ...style, display: 'grid', placeItems: 'center', fontSize: `${size * .4}rem`, fontFamily: 'Georgia', color: '#203d34' }}>{name.slice(0, 2).toUpperCase()}</span>
+    : <img src={artUrl(file)} alt={onClick ? '' : name} draggable={false} onError={() => setBroken(true)} style={style} />;
+  return onClick ? <button className="avatar-button" type="button" onClick={onClick} aria-label={`Choose ${name} portrait`} aria-pressed={Boolean(selected)}>{portrait}</button> : portrait;
 }

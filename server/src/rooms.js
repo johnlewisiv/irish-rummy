@@ -2,6 +2,7 @@
 // A "room" holds up to 6 seats (humans + bots), any number of spectators,
 // a chat log, and (once started) a Game instance.
 
+import { randomUUID } from 'node:crypto';
 import { Game } from './game.js';
 
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -37,7 +38,7 @@ export class RoomManager {
 
   toSnapshot() {
     return {
-      version: 1,
+      version: 2,
       savedAt: new Date().toISOString(),
       rooms: [...this.rooms.values()].map((room) => ({
         code: room.code,
@@ -48,21 +49,24 @@ export class RoomManager {
         chat: room.chat,
         buyWindowMs: room.buyWindowMs,
         createdAt: room.createdAt,
+        updatedAt: room.updatedAt,
         game: room.game ? room.game.toSnapshot() : null,
       })),
     };
   }
 
-  loadSnapshot(snapshot, onGameChange = () => {}) {
-    if (!snapshot?.rooms || !Array.isArray(snapshot.rooms)) return 0;
-    this.rooms.clear();
+  loadSnapshot(snapshot, onGameChange = () => {}, gameOptions = () => ({})) {
+    if (snapshot === null || snapshot === undefined) return 0;
+    if (![1, 2].includes(snapshot.version) || !Array.isArray(snapshot.rooms)) throw new Error('Invalid or unsupported room snapshot.');
+    const restored = new Map();
     for (const raw of snapshot.rooms) {
-      if (!raw?.code) continue;
+      if (!raw?.code || !Array.isArray(raw.seats) || !raw.seats.length || raw.seats.length > 6) throw new Error('Invalid room snapshot.');
+      if (raw.seats.some((s) => !s.token || typeof s.token !== 'string') || new Set(raw.seats.map((s) => s.token)).size !== raw.seats.length) throw new Error('Invalid saved seats.');
       const room = {
         code: String(raw.code).toUpperCase(),
         name: raw.name || 'Irish Rummy room',
         hostToken: raw.hostToken,
-        seats: clonePlain(raw.seats, []),
+        seats: clonePlain(raw.seats, []).map((s) => ({ ...s, id: s.id || randomUUID() })),
         spectators: clonePlain(raw.spectators, []),
         chat: clonePlain(raw.chat, []).slice(-200),
         game: null,
@@ -70,12 +74,19 @@ export class RoomManager {
           ? Number(raw.buyWindowMs)
           : Number(process.env.BUY_WINDOW_MS ?? 8000),
         createdAt: raw.createdAt || Date.now(),
+        updatedAt: raw.updatedAt || raw.createdAt || Date.now(),
       };
       if (!room.hostToken && room.seats[0]) room.hostToken = room.seats[0].token;
-      if (raw.game) room.game = Game.fromSnapshot(raw.game, () => onGameChange(room), { buyWindowMs: room.buyWindowMs });
+      if (!room.seats.some((s) => s.token === room.hostToken) || room.seats.some((s) => typeof s.id !== 'string')
+        || new Set(room.seats.map((s) => s.id)).size !== room.seats.length) throw new Error('Invalid saved room identity.');
+      if (raw.game) room.game = Game.fromSnapshot(raw.game, () => onGameChange(room), { buyWindowMs: room.buyWindowMs, ...gameOptions(room) });
       syncBotSeq(room);
-      this.rooms.set(room.code, room);
+      if (restored.has(room.code)) throw new Error('Duplicate saved room code.');
+      if (room.game && (room.game.players.length !== room.seats.length || room.game.players.some((p) => !room.seats.some((s) => s.token === p.id)))) throw new Error('Saved game seats do not match room seats.');
+      restored.set(room.code, room);
     }
+    for (const room of this.rooms.values()) room.game?.destroy();
+    this.rooms = restored;
     return this.rooms.size;
   }
 
@@ -88,13 +99,14 @@ export class RoomManager {
       code,
       name: name || `${host.name}'s game`,
       hostToken: host.token,
-      seats: [{ token: host.token, name: host.name, isBot: false, avatar: null }],
+      seats: [{ id: randomUUID(), token: host.token, name: host.name, isBot: false, avatar: null }],
       spectators: [], // tokens
       chat: [],
       game: null,
       // room setting: 0 = casual (no countdown); default from env for ops
       buyWindowMs: Number(process.env.BUY_WINDOW_MS ?? 8000),
       createdAt: Date.now(),
+      updatedAt: Date.now(),
     };
     this.rooms.set(code, room);
     return room;
@@ -121,7 +133,7 @@ export class RoomManager {
     if (room.game) return { error: 'Game already started — you can spectate.' };
     if (room.seats.length >= 6) return { error: 'Room is full (6 players max).' };
     if (room.seats.some((s) => s.token === user.token)) return {};
-    room.seats.push({ token: user.token, name: user.name, isBot: false, avatar: null });
+    room.seats.push({ id: randomUUID(), token: user.token, name: user.name, isBot: false, avatar: null });
     return {};
   }
 
@@ -137,6 +149,7 @@ export class RoomManager {
     const base = BOT_NAMES[difficulty] || 'Bot';
     const count = room.seats.filter((s) => s.isBot && s.name.startsWith(base)).length;
     room.seats.push({
+      id: randomUUID(),
       token: `bot-${botSeq++}`,
       name: count ? `${base} ${count + 1}` : base,
       isBot: true,
@@ -161,7 +174,7 @@ export class RoomManager {
     room.seats = room.seats.filter((s) => s.token !== token);
   }
 
-  startGame(room, onChange) {
+  startGame(room, onChange, opts = {}) {
     if (room.game) return { error: 'Already started.' };
     if (room.seats.length < 2) return { error: 'Need at least 2 players (add a bot to play solo).' };
     // Give any undecided humans a free portrait before the deal.
@@ -171,7 +184,7 @@ export class RoomManager {
         id: s.token, name: s.name, isBot: s.isBot, difficulty: s.difficulty, avatar: s.avatar,
       })),
       onChange,
-      { buyWindowMs: room.buyWindowMs },
+      { buyWindowMs: room.buyWindowMs, ...opts },
     );
     room.game.startNextRound();
     return {};
@@ -192,18 +205,6 @@ export class RoomManager {
     this.rooms.delete(code);
   }
 
-  /** Drop stale finished/abandoned rooms (called periodically). */
-  sweep() {
-    const now = Date.now();
-    let changed = false;
-    for (const [code, room] of this.rooms) {
-      const dead = room.game?.phase === 'gameOver' && now - room.createdAt > 60 * 60 * 1000;
-      const abandoned = !room.game && now - room.createdAt > 12 * 60 * 60 * 1000;
-      if (dead || abandoned) {
-        this.destroyRoom(code);
-        changed = true;
-      }
-    }
-    return changed;
-  }
+  /** Family tables are kept until their host explicitly closes them. */
+  sweep() { return false; }
 }

@@ -23,7 +23,7 @@ cd server && npm test
 
 ## Playing
 
-Enter a name (no account needed — your seat is tied to a browser token, so a refresh or dropped connection reconnects you mid-game). Create a game, share the 5-letter room code, pick your lake-house portrait, or add bots and start. Anyone can join a running game as a spectator, and everyone shares the table chat. There's a 📖 rule book in the header for new players.
+Create a named player (no account needed), then create a game or join with its 5-letter code. Your browser saves the private identity needed to reclaim your seat. After closing a tab, choose that saved player when you return. Separate family members sharing a computer can choose different players in separate tabs. Pick your lake-house portrait, invite family, or add bots and start. Spectators can watch without seeing anyone's hand.
 
 **Bot difficulties**: easy **Pippin** (draws blind, sloppy discards), medium **Tom Bombadil** (plan-driven play), hard **Saruman** (also buys cards that put him down instantly), and — only in custom games — **Peggy**, who plays every angle *and counts cards* (she reads the deck when choosing where to draw; disclosed in her tooltip). In simulation Peggy wins ~65% of 4-player games. Quick Play seats you against Pippin, Tom, and Saruman.
 
@@ -55,7 +55,8 @@ irish-rummy/
 │   ├── src/bots.js          Bot AI: plan-based play (greedy partial contract fill)
 │   │                        in three difficulties
 │   ├── src/rooms.js         Lobby: room codes, seats, bots, spectators, sweeping
-│   ├── src/persistence.js   Disk-backed room/game snapshots for restart recovery
+│   ├── src/persistence.js   Server-only Postgres or atomic disk snapshots
+│   ├── src/durable-rooms.js Serialized moves, commit-before-ack, failure recovery
 │   ├── src/index.js         Socket protocol + static hosting of the built client
 │   └── test/                rules.test.js · engine.test.js · simulate.js
 └── client/                  React 18 + Vite + Tailwind v4
@@ -67,11 +68,13 @@ irish-rummy/
     └── src/ChatPanel.jsx    Table chat (players + spectators)
 ```
 
-**Real-time flow**: every mutation goes through a socket event (`game:draw`, `game:goDown`, `game:layOff`, `game:swapJoker`, `game:discard`, `game:buy`…), is validated server-side (the server is fully authoritative — clients can't cheat), then each connected socket receives a *personalized* `room:state` (you only ever see your own hand; spectators see none).
+**Real-time flow**: socket actions and game timers enter one server queue. The engine validates each action, checks the deck, and commits the complete snapshot before acknowledging the move or broadcasting the new state. Each viewer receives a personalized hand. Public player IDs are separate from the private tokens used to recover seats.
 
-**Connection drops**: seats are keyed to a per-tab session token, not to the socket. Refresh the page or reopen the laptop and you're back in your seat with your cards. Because the token is per *tab*, two tabs in the same browser are two different players — a couple can share one computer with two windows.
+**Connection drops**: saved player profiles keep their original token in browser storage. Each tab selects a player explicitly; refresh reconnects that selection. Closed tabs can recover through the saved-player chooser. The client remembers the selected room, including an intentional return to the lobby. Offline moves are rejected, and an uncertain move is never automatically replayed. Clearing site storage or switching to another device still requires an account/recovery mechanism that this release does not provide.
 
-**Restart recovery**: when `ROOM_STATE_FILE` is set (or `/var/data` exists on Render), the server writes a small JSON snapshot after every room/game change. Running rooms, hands, scores, chat, buy windows, and room codes are restored when the Node process restarts. For async family games, pick **1 hour** or **No timer** for the buy timer so play does not advance while everyone is away.
+**Restart recovery**: configure `IRISH_RUMMY_DATABASE_URL` to use a dedicated Supabase Postgres database. Rooms, hands, scores, chat, buy windows, and room codes are saved in a private schema. Failed saves pause play and return an error; recovery reloads the database rather than replaying an uncertain move. Corrupt or unreadable saves block startup. Local development defaults to an atomic file under `server/.data/`; Render can continue using its existing persistent disk until database migration is complete.
+
+Use **No timer** for family games played across hours or days. Tables with human players are retained until the host closes them. Keep one server instance: the database rejects stale concurrent writers, but it is not a shared multi-server Socket.io adapter.
 
 ## Deploying to irishrummy.com
 
@@ -83,7 +86,7 @@ This repo includes `render.yaml`, so Render can create the service from the repo
 
 Service type: **Web Service**
 
-Plan: **Starter** plus a small persistent disk. The disk is what lets open games survive deploys/restarts; the paid instance is what prevents free-service sleeping.
+The existing deployment uses a web service and persistent disk. Keep its disk attached while importing existing games into Supabase. Database storage does not itself prevent the web service from sleeping or keep WebSocket connections open.
 
 Build command:
 
@@ -105,7 +108,7 @@ Persistent room state:
 - Disk size: 1 GB is plenty for family games
 - Env var: `ROOM_STATE_FILE=/var/data/irish-rummy-state.json`
 
-Only files under the disk mount survive a Render restart. The app automatically disables persistence when no state file path is configured, which is fine for local development.
+Only files under the disk mount survive a Render restart. Production refuses to start without either database storage or a configured persistent file. See [the database migration guide](docs/SUPABASE-PERSISTENCE.md) before setting the database URL on an existing deployment. A populated disk snapshot and an empty database require an explicit import.
 
 ### Railway
 
@@ -116,7 +119,7 @@ cd client && npm install && npm run build && cd ../server && npm install
 node server/src/index.js
 ```
 
-No database is required for the disk-backed Render setup. If you do not configure `ROOM_STATE_FILE`, running games live only in memory and a service restart ends active rooms.
+Set `IRISH_RUMMY_DATABASE_URL` for Supabase storage, or configure `ROOM_STATE_FILE` on a mounted persistent volume. Never put the database URL into a `VITE_` variable or browser code.
 
 The client auto-detects the path it's served from, so the same build works at `/`, `/rummy/`, or anywhere else.
 
@@ -131,9 +134,18 @@ The client auto-detects the path it's served from, so the same build works at `/
 | `BUY_WINDOW_MS` | 8000 | Default room buy timer (0 = casual: waits for everyone) |
 | `STRICT_SET_SUITS` | off | `1` = the initial 3 cards of a set must be different suits |
 | `ROOM_STATE_FILE` | `/var/data/irish-rummy-state.json` when `/var/data` exists | JSON snapshot path for persistent rooms |
+| `IRISH_RUMMY_DATABASE_URL` | unset | Server-only Postgres connection; takes precedence over file storage |
+| `IRISH_RUMMY_STATE_KEY` | `family-games` | Snapshot namespace within the private game-state table |
+| `IRISH_RUMMY_DATABASE_CA_FILE` | unset | Optional trusted CA certificate for verified database TLS |
 
 ## Design choices (and how to change them)
 
-- **Nickname sign-in, no accounts** — chosen for zero-setup family play. To add Google/Apple/email later, drop Firebase Auth into the client, send the ID token in `hello`, and verify it server-side with `firebase-admin`; the token already *is* the identity key, so nothing else changes.
-- **Disk-backed state, no database** — right-sized for a few concurrent family games. The server keeps live state in memory for speed, then snapshots the rooms to disk after each change so deploys/restarts can restore them. For larger public use later, move the same snapshot shape into Postgres or another managed store.
+- **Named browser profiles** keep family setup simple and preserve each player's recovery identity. Account-based cross-device recovery is a separate feature.
+- **Server-only Postgres snapshots** preserve complete game state with version checks. Hidden hands and recovery tokens stay out of the Supabase Data API. Atomic disk storage remains available for development and the existing deployment during migration.
 - **Web-only** — the UI is responsive and touch-friendly (tap-to-select works everywhere; drag-and-drop is a desktop nicety), so phones play fine in the browser.
+
+## Verification and artwork
+
+Install root, client, and server dependencies, then run `npm test`. The full suite covers rules, engine simulations, saved browser profiles, SQL constraints/permissions, and multiplayer recovery. SQL tests use a local PostgreSQL WASM engine; they do not substitute for checking the deployed Supabase connection.
+
+The September refresh preserves the original art and adds versioned lake-house and card-back illustrations. Design direction, generation prompts, and concept references are in `design/refresh-2026-09/` and `ASSET-PROMPTS.md`. UI controls and card labels remain rendered by the app.

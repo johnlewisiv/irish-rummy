@@ -41,131 +41,49 @@ function WaitingRoom({ room, you, act, onLeave, chat }) {
   const [difficulty, setDifficulty] = useState('medium');
   const [copied, setCopied] = useState(false);
   const [showRules, setShowRules] = useState(false);
-  const mySeat = room.seats.find((s) => s.token === you);
-  const copy = () => {
-    navigator.clipboard?.writeText(room.code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+  const mySeat = room.seats.find((seat) => seat.token === you);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(room.code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch { setCopied(false); }
   };
   return (
-    <div className="max-w-xl mx-auto px-4 py-8 flex flex-col gap-5">
-      <header className="text-center">
-        <h1 className="text-2xl font-black">{room.name}</h1>
-        <button
-          onClick={copy}
-          className="mt-2 glass-panel rounded-xl px-5 py-2 text-3xl tracking-[0.35em] font-black text-amber-300 hover:scale-105 transition-transform"
-          title="Click to copy"
-        >
-          {room.code}
-        </button>
-        <p className="text-sm text-emerald-200/70 mt-1">{copied ? '✓ copied!' : 'share this code — friends join from the lobby'}</p>
-      </header>
-
-      <section className="felt-panel rounded-2xl p-5">
-        <h2 className="font-extrabold mb-3">Players <span className="text-emerald-300/70 font-semibold">({room.seats.length}/6)</span></h2>
-        <ul className="flex flex-col gap-2">
-          {room.seats.map((s) => (
-            <li key={s.token} className="flex items-center gap-3 bg-emerald-950/50 rounded-xl px-3 py-2">
-              <Avatar name={s.name} isBot={s.isBot} avatar={s.avatar} size={3} />
-              <span className="flex-1">
-                <b>{s.name}</b>{s.token === you && ' (you)'}
-                {s.isBot && s.difficulty !== 'extreme' && <span className="text-xs text-emerald-300/80"> · {s.difficulty}</span>}
-                {s.token === room.hostToken && <span className="text-xs text-amber-300"> · host</span>}
-              </span>
-              {isHost && s.isBot && (
-                <button onClick={() => act('room:removeBot', { token: s.token })} className="text-red-300 hover:text-red-200 text-sm">remove</button>
-              )}
-            </li>
-          ))}
-        </ul>
-
-        {/* pick your portrait */}
-        <div className="mt-4">
-          <div className="text-xs font-bold text-emerald-200/80 mb-1.5">Choose your portrait</div>
-          <div className="flex gap-2 flex-wrap">
-            {ALL_AVATARS.map((a) => (
-              <Avatar key={a} name={a} avatar={a} size={3.2}
-                selected={mySeat?.avatar === a}
-                onClick={() => act('room:avatar', { avatar: a })} />
-            ))}
-          </div>
+    <main className="waiting-shell">
+      <header className="welcome-header"><span className="brand">Irish Rummy<span className="brand-period">.</span></span><button className="text-button" onClick={onLeave}>Back to lobby</button></header>
+      <div className="waiting-heading"><div><h1>{room.name}</h1><p>A few good people. Seven rounds. One family tradition.</p></div><button onClick={copy} className="invite-code" aria-label={`Copy room code ${room.code}`}><span>{room.code}</span><small>{copied ? 'Copied to clipboard' : 'Copy code to invite family'}</small></button></div>
+      <div className="waiting-layout">
+        <div className="waiting-main">
+          <section className="players-section"><h2>Players <span>{room.seats.length} / 6</span></h2><ul className="waiting-players">{room.seats.map((seat) => <li key={seat.token}><Avatar name={seat.name} isBot={seat.isBot} avatar={seat.avatar} size={3.2} /><div><strong>{seat.name}{seat.token === you && ' (you)'}</strong><small>{seat.token === room.hostToken ? 'Host' : seat.isBot ? `${seat.difficulty === 'extreme' ? 'Peggy' : seat.difficulty} bot` : 'Ready for the table'}</small></div>{isHost && seat.isBot && <button onClick={() => act('room:removeBot', { token: seat.token })} className="text-button danger-link">Remove</button>}</li>)}</ul>
+          {isHost && room.seats.length < 6 && <div className="bot-controls"><select aria-label="Bot difficulty" value={difficulty} onChange={(e) => setDifficulty(e.target.value)}><option value="easy">Easy · Pippin</option><option value="medium">Medium · Tom Bombadil</option><option value="hard">Hard · Saruman</option><option value="extreme">Peggy</option></select><button onClick={() => act('room:addBot', { difficulty })} className="outline-button">Add bot</button>{difficulty === 'extreme' && <p className="form-note">Peggy learned from the nuns. She counts cards. You've been warned.</p>}</div>}
+          </section>
+          {mySeat && <section className="portrait-section"><h3>Choose your portrait</h3><div className="portrait-options">{ALL_AVATARS.map((avatar) => <Avatar key={avatar} name={avatar.replace('avatar-', '').replace('.png', '')} avatar={avatar} size={3.2} selected={mySeat.avatar === avatar} onClick={() => act('room:avatar', { avatar })} />)}</div></section>}
+          <section className="timer-section"><label htmlFor="buy-timer">Buy timer</label>{isHost ? <select id="buy-timer" value={room.buyWindowMs ?? 8000} onChange={(e) => act('room:settings', { buyWindowMs: Number(e.target.value) })}>{BUY_TIMER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select> : <p>{BUY_TIMER_OPTIONS.find((option) => option.value === (room.buyWindowMs ?? 8000))?.label}</p>}<p className="form-note">Time for everyone to buy or pass after a discard. Anyone can pause during the game.</p></section>
+          <div className="waiting-actions">{isHost && <button onClick={() => act('room:start')} disabled={room.seats.length < 2} className="primary-button">Start game</button>}<button onClick={() => setShowRules(true)} className="text-button">How to play</button>{isHost && <button onClick={() => window.confirm(`Close ${room.name}? Everyone will be returned to the lobby.`) && act('room:close', { code: room.code })} className="text-button danger-link">Close room</button>}</div>
+          <p className="form-note">{isHost ? room.seats.length < 2 ? 'Add a bot or invite a friend. The game needs at least 2 players.' : 'Everyone here? Deal the first round when you are ready.' : 'Waiting for the host to deal the first round…'}</p>
         </div>
-
-        {isHost && room.seats.length < 6 && (
-          <div className="flex items-center gap-2 mt-4 flex-wrap">
-            <select value={difficulty} onChange={(e) => setDifficulty(e.target.value)} className="text-black rounded-lg px-2 py-2 bg-emerald-50 font-semibold">
-              <option value="easy">Easy · Pippin</option>
-              <option value="medium">Medium · Tom Bombadil</option>
-              <option value="hard">Hard · Saruman</option>
-              <option value="extreme">Peggy</option>
-            </select>
-            <button onClick={() => act('room:addBot', { difficulty })} className="bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold rounded-lg px-4 py-2">
-              + Add bot
-            </button>
-            {difficulty === 'extreme' && (
-              <span className="text-xs text-red-300/90 w-full">Peggy learned from the nuns — she counts cards. She mostly wins. You've been warned.</span>
-            )}
-          </div>
-        )}
-
-        {/* buy timer setting */}
-        <div className="mt-4 flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-bold text-emerald-200/80">Buy timer:</span>
-          {isHost ? (
-            <select
-              value={room.buyWindowMs ?? 8000}
-              onChange={(e) => act('room:settings', { buyWindowMs: Number(e.target.value) })}
-              className="text-black rounded-lg px-2 py-1.5 bg-emerald-50 text-sm font-semibold"
-            >
-              {BUY_TIMER_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          ) : (
-            <span className="text-sm text-emerald-100/90">{BUY_TIMER_OPTIONS.find((o) => o.value === (room.buyWindowMs ?? 8000))?.label}</span>
-          )}
-          <span className="text-[0.7rem] text-emerald-200/60 w-full">After every discard, everyone else gets this long to buy or pass. Anyone can pause the timer mid-game.</span>
-        </div>
-      </section>
-
-      <div className="flex gap-3 justify-center">
-        {isHost && (
-          <button
-            onClick={() => act('room:start')}
-            disabled={room.seats.length < 2}
-            className="bg-amber-400 disabled:opacity-40 hover:bg-amber-300 text-black font-black rounded-2xl px-10 py-3 text-lg shadow-xl hover:scale-105 transition-transform"
-          >
-            Start game ▶
-          </button>
-        )}
-        {isHost && (
-          <button
-            onClick={() => window.confirm(`Close ${room.name}? Everyone will be returned to the lobby.`) && act('room:close', { code: room.code })}
-            className="bg-red-800/85 hover:bg-red-700 rounded-2xl px-5 py-3"
-          >
-            Close room
-          </button>
-        )}
-        <button onClick={onLeave} className="bg-emerald-900/70 hover:bg-emerald-800 rounded-2xl px-5 py-3">Leave</button>
+        <aside className="waiting-aside"><img className="waiting-lake" src={artUrl('lake-house-v2.png')} alt="The quiet lake outside the family card room" /><ChatPanel chat={chat} act={act} inline /></aside>
       </div>
-      {isHost && room.seats.length < 2 && (
-        <p className="text-center text-emerald-200/70 text-sm -mt-2">Add a bot or wait for a friend — you need at least 2 players.</p>
-      )}
-      {!isHost && <p className="text-center text-emerald-200/70 text-sm">Waiting for the host to start…</p>}
-      <button onClick={() => setShowRules(true)} className="text-amber-300 hover:text-amber-200 text-sm -mt-2">📖 New here? Read how to play</button>
-      <ChatPanel chat={chat} act={act} inline />
       {showRules && <RuleBook onClose={() => setShowRules(false)} />}
-    </div>
+    </main>
   );
 }
 
 /* ================= rule book ================= */
 
-function RuleBook({ onClose }) {
+export function RuleBook({ onClose }) {
+  useEffect(() => {
+    const onKeyDown = (event) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
   return (
     <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center px-4 py-6" onClick={onClose}>
-      <div className="glass-panel rounded-2xl max-w-lg w-full max-h-full flex flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label="How to play Irish Rummy" className="glass-panel rounded-2xl max-w-lg w-full max-h-full flex flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-3 border-b border-emerald-800">
           <b className="text-lg">📖 How to play Irish Rummy</b>
-          <button onClick={onClose} className="text-emerald-300 hover:text-white text-lg">✕</button>
+          <button onClick={onClose} aria-label="Close dialog" className="text-emerald-300 hover:text-white text-lg">✕</button>
         </div>
         <div className="overflow-y-auto px-5 py-4 text-sm flex flex-col gap-3 text-emerald-50/90">
           <p><b className="text-amber-300">The goal:</b> seven rounds, lowest total score wins. Points are BAD — they're the cards stuck in your hand when someone goes out.</p>
@@ -402,48 +320,21 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
   /* ---------- render ---------- */
 
   return (
-    <div className="flex flex-col min-h-screen max-w-6xl mx-auto px-2 sm:px-4 pb-3">
-      {/* header */}
-      <header className="flex items-center justify-between gap-2 py-2 text-sm">
-        <div className="flex items-center gap-2 min-w-0">
-          <button onClick={onLeave} className="bg-emerald-900/70 hover:bg-emerald-800 rounded-lg px-2.5 py-1.5 shrink-0">← Leave</button>
-          <span className="text-emerald-200/80 truncate">{room.name} · <b className="tracking-widest text-amber-300">{room.code}</b></span>
-          {role === 'spectator' && <span className="bg-purple-700/80 rounded-lg px-2 py-1 shrink-0">👁 spectating</span>}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="glass-panel rounded-xl px-3 py-1.5 text-right">
-            <div className="font-black leading-tight flex items-center gap-1.5 justify-end">
-              <span className="flex gap-1 mr-1">
-                {Array.from({ length: 7 }, (_, i) => (
-                  <span key={i} className={`round-dot ${i + 1 < game.round ? 'done' : i + 1 === game.round ? 'now' : ''}`} />
-                ))}
-              </span>
-              Round {game.round}<span className="text-emerald-300/60">/7</span>
-            </div>
-            <div className="text-[0.7rem] text-amber-200/90 leading-tight">{contract?.label}</div>
-          </div>
-          <button onClick={() => setShowRules(true)} className="bg-emerald-900/70 hover:bg-emerald-800 rounded-lg px-2.5 py-2" title="How to play">📖</button>
-          <button onClick={() => setShowLog(true)} className="bg-emerald-900/70 hover:bg-emerald-800 rounded-lg px-2.5 py-2" title="Game log & buys">📜</button>
-          <button onClick={() => setShowScores(true)} className="bg-emerald-900/70 hover:bg-emerald-800 rounded-lg px-2.5 py-2" title="Scoreboard">🏆</button>
-          <button onClick={() => setSound(toggleSound())} className="bg-emerald-900/70 hover:bg-emerald-800 rounded-lg px-2.5 py-2" title="Sound on/off">{sound ? '🔊' : '🔇'}</button>
-          {isHost && (
-            <button
-              onClick={() => window.confirm(`Close ${room.name}? Everyone will be returned to the lobby.`) && act('room:close', { code: room.code })}
-              className="bg-red-800/85 hover:bg-red-700 rounded-lg px-2.5 py-2"
-              title="Close this game for everyone"
-            >
-              Close
-            </button>
-          )}
-        </div>
+    <div className="game-shell">
+      <header className="game-header">
+        <div className="game-title"><span className="brand brand-compact">Irish Rummy<span className="brand-period">.</span></span><span className="game-room-name">{room.name} <b>{room.code}</b>{role === 'spectator' && <small>Watching</small>}</span></div>
+        <nav className="game-utilities" aria-label="Table controls">
+          <button onClick={() => setShowRules(true)}>Rules</button><button onClick={() => setShowLog(true)}>History</button><button onClick={() => setShowScores(true)}>Scores</button><button onClick={() => setSound(toggleSound())} aria-pressed={sound}>Sound {sound ? 'on' : 'off'}</button><button onClick={onLeave}>Leave</button>
+          {isHost && <button className="danger-link" onClick={() => window.confirm(`Close ${room.name}? Everyone will be returned to the lobby.`) && act('room:close', { code: room.code })}>Close table</button>}
+        </nav>
       </header>
 
       {/* seats */}
-      <div className="flex flex-wrap gap-2 justify-center py-1.5">
+      <div className="player-rail">
         {game.players.map((p) => (
           <div
             key={p.id}
-            className={`rounded-2xl pl-2 pr-3 py-1.5 felt-panel flex items-center gap-2.5 ${game.currentPlayerId === p.id ? 'pulse-turn' : ''}`}
+            className={`player-seat ${game.currentPlayerId === p.id ? 'current-seat' : ''}`}
           >
             <Avatar name={p.name} isBot={p.isBot} avatar={p.avatar} size={3.4} />
             <div>
@@ -462,23 +353,24 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
         ))}
       </div>
 
+      <section className="playfield" aria-label="Game table">
+      <div className="round-heading"><h1>Round {game.round} <span>of 7</span></h1><p>{contract?.label}</p></div>
       {/* piles */}
-      <div className="flex items-end justify-center gap-7 py-3">
+      <div className="draw-area">
         <div className="text-center">
-          <div
+          <button type="button" disabled={!canDraw} aria-label="Draw from the deck"
             onClick={() => canDraw && act('game:draw', { from: 'deck' })}
             className={`pile-stack ${canDraw ? 'clickable cursor-pointer' : ''}`}
             title={canDraw ? 'Draw from the deck' : 'Draw pile'}
           >
             <div className="card-back big" /><div className="card-back big" /><div className="card-back big" />
-          </div>
+          </button>
           <div className="text-xs mt-1.5 text-emerald-200/70 font-semibold">DECK · {game.drawCount}</div>
         </div>
         <div className="text-center" onDragOver={(e) => canAct && e.preventDefault()} onDrop={dropOnDiscard}>
           {game.discardTop ? (
-            <div key={game.discardTop.id} onClick={clickDiscardPile}
-              className={`flip-in ${canDraw || (canAct && selected.length === 1) ? 'cursor-pointer hover:-translate-y-1 transition-transform' : ''}`}>
-              <Card card={game.discardTop} big title={canDraw ? 'Take this card' : canAct ? 'Discard here' : ''} />
+            <div key={game.discardTop.id} className="flip-in">
+              <Card card={game.discardTop} big onClick={canDraw || (canAct && selected.length === 1) ? clickDiscardPile : undefined} title={canDraw ? 'Take this card' : canAct ? 'Discard here' : ''} />
             </div>
           ) : (
             <div className="playing-card big opacity-25" />
@@ -505,10 +397,10 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
 
       {/* table melds */}
       <div className="flex-1 flex flex-col">
-        <div className="flex-1 min-h-[9rem] felt-framed p-4 flex flex-wrap gap-x-5 gap-y-3 content-start justify-center">
+        <div className={`table-melds ${game.tableMelds.length === 0 ? 'empty-table' : ''}`}>
           {game.tableMelds.length === 0 && (
             <div className="text-emerald-200/45 italic self-center text-center">
-              No one has gone down yet.<br />
+              <span className="empty-meld-title">Melds appear here.</span><br />
               <span className="text-xs">This round needs: <b className="text-emerald-100/70">{contract?.label}</b></span>
             </div>
           )}
@@ -525,8 +417,9 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
         </div>
       </div>
 
+      </section>
       {/* status strip */}
-      <div className="text-center text-sm py-1.5 min-h-[2.1rem]">
+      <div className="turn-status" role="status">
         {game.mustPlayJoker && (
           <span className="bg-purple-600 rounded-lg px-3 py-1 font-bold shadow">⚠ Play the joker you took before discarding!</span>
         )}
@@ -603,7 +496,7 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
           {canAct && !me.hasGoneDown && !staging && (
             <button
               onClick={openStaging}
-              className={`${game.canGoDownHint ? 'bg-amber-400 hover:bg-amber-300 animate-bounce' : 'bg-amber-400/60 hover:bg-amber-300'} text-black font-extrabold rounded-xl px-5 py-2 shadow-lg`}
+              className={`${game.canGoDownHint ? 'bg-amber-400 hover:bg-amber-300' : 'bg-amber-400/60 hover:bg-amber-300'} text-black font-extrabold rounded-xl px-5 py-2 shadow-lg`}
             >
               ⬇ Go down{game.canGoDownHint ? ' — ready!' : ''}
             </button>
@@ -623,15 +516,15 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
       {/* your hand */}
       {isPlayer && (
         <div
-          className="felt-framed px-4 pb-4 pt-2.5"
+          className="hand-band"
           onDragOver={(e) => e.preventDefault()}
           onDrop={() => reorderTo('__end__')}
         >
           <div className="text-xs text-emerald-200/70 mb-0.5 flex justify-between items-center flex-wrap gap-1">
             <span className="font-semibold">Your hand · {hand.length} cards · {hand.reduce((s, c) => s + points(c), 0)} pts if caught</span>
             <span className="flex gap-1.5">
-              <button onClick={sortRuns} className="bg-emerald-900/80 hover:bg-emerald-800 rounded px-2 py-0.5" title="Sort by suit, then rank — good for straights">sort ♠A23</button>
-              <button onClick={sortSets} className="bg-emerald-900/80 hover:bg-emerald-800 rounded px-2 py-0.5" title="Sort by rank — good for sets">sort 777</button>
+              <button onClick={sortRuns} className="bg-emerald-900/80 hover:bg-emerald-800 rounded px-2 py-0.5" title="Sort by suit, then rank — good for straights">Sort by suit</button>
+              <button onClick={sortSets} className="bg-emerald-900/80 hover:bg-emerald-800 rounded px-2 py-0.5" title="Sort by rank — good for sets">Sort by rank</button>
             </span>
           </div>
           <div className="fan">
@@ -659,10 +552,10 @@ function Table({ room, game, you, role, act, onLeave, chat }) {
       {/* chat toggle */}
       <button
         onClick={() => { setShowChat((s) => !s); setUnread(0); }}
-        className="fixed bottom-4 right-4 bg-emerald-600 hover:bg-emerald-500 rounded-full w-12 h-12 text-xl shadow-xl z-40"
+        className="chat-toggle" aria-label={`Table chat${unread ? `, ${unread} unread messages` : ''}`} aria-expanded={showChat}
         title="Chat"
       >
-        💬{unread > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">{unread}</span>}
+        Chat{unread > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">{unread}</span>}
       </button>
       {showChat && (
         <div className="fixed bottom-20 right-4 w-80 max-w-[90vw] z-40">
@@ -717,7 +610,7 @@ function BuySidebar({ game, you, act, now, buyEligible, myTurn, iRequestedBuy, a
   const pct = timed && !win.paused && win.expiresAt
     ? Math.max(0, Math.min(100, (secsLeft * 1000 / win.windowMs) * 100)) : 0;
   return (
-    <div className="flex flex-col gap-1.5 pb-5 w-[12rem]">
+    <div className="buy-sidebar flex flex-col gap-1.5">
       {buyEligible && !iRequestedBuy && !iPassed && (
         <div className="flex gap-1.5">
           <button
@@ -733,7 +626,7 @@ function BuySidebar({ game, you, act, now, buyEligible, myTurn, iRequestedBuy, a
             className="flex-1 bg-emerald-900/90 hover:bg-emerald-800 font-bold rounded-xl px-2 py-2 shadow-lg"
             title="Pass on this card"
           >
-            ✕ Pass
+            Pass
           </button>
         </div>
       )}
@@ -821,7 +714,7 @@ function LogDrawer({ log, buys, onClose }) {
       <div className="glass-panel h-full w-96 max-w-[92vw] flex flex-col rounded-l-2xl shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-emerald-800">
           <b>📜 Game log</b>
-          <button onClick={onClose} className="text-emerald-300 hover:text-white text-lg">✕</button>
+          <button onClick={onClose} aria-label="Close dialog" className="text-emerald-300 hover:text-white text-lg">✕</button>
         </div>
         <div className="px-4 py-3 border-b border-emerald-800/60">
           <div className="text-xs font-black text-amber-300 mb-1.5 tracking-wide"><BuyToken className="w-4 h-4" /> BUYS THIS GAME</div>
@@ -890,7 +783,7 @@ function Scoreboard({ players, round, onClose }) {
       <div className="glass-panel rounded-2xl p-5 max-w-lg w-full shadow-2xl overflow-x-auto" onClick={(e) => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-3">
           <h2 className="text-lg font-black">🏆 Scoreboard</h2>
-          <button onClick={onClose} className="text-emerald-300 hover:text-white text-lg">✕</button>
+          <button onClick={onClose} aria-label="Close dialog" className="text-emerald-300 hover:text-white text-lg">✕</button>
         </div>
         <table className="w-full text-sm">
           <thead>

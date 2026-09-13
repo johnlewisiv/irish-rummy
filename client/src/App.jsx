@@ -1,271 +1,273 @@
-// App.jsx — top-level screens: sign-in → lobby → room (waiting or in-game).
+// Irish Rummy — a family table, with explicit saved-player recovery.
 import React, { useEffect, useState, useCallback, useRef } from 'react';
-import { socket, call, getToken, getSavedName, saveName, artUrl } from './socket.js';
-import GameScreen from './GameScreen.jsx';
+import {
+  socket, call, artUrl, listProfiles, getActiveProfile, createProfile, selectProfile,
+  getHelloPayload, rememberRoom, clearCurrentRoom, forgetRoom,
+  getConnectionStatus, subscribeConnectionStatus,
+} from './socket.js';
+import GameScreen, { RuleBook } from './GameScreen.jsx';
+
+function readInitialPlayer() {
+  try { return { profile: getActiveProfile(), profiles: listProfiles(), error: null }; }
+  catch (error) { return { profile: null, profiles: [], error: error.message }; }
+}
 
 export default function App() {
-  const [name, setName] = useState(getSavedName());
+  const [initial] = useState(readInitialPlayer);
+  const [name, setName] = useState(initial.profile?.name || '');
+  const [profiles, setProfiles] = useState(initial.profiles);
   const [signedIn, setSignedIn] = useState(false);
-  const [roomState, setRoomState] = useState(null); // {room, game, you, role}
+  const [roomState, setRoomState] = useState(null);
   const [roomsList, setRoomsList] = useState([]);
   const [chat, setChat] = useState([]);
-  const [toast, setToast] = useState(null);
-  const [connected, setConnected] = useState(socket.connected);
+  const [toast, setToast] = useState(initial.error);
+  const [health, setHealth] = useState(getConnectionStatus);
+  const [busy, setBusy] = useState(false);
   const toastTimer = useRef(null);
   const roomStateRef = useRef(null);
+  const helloInFlight = useRef(false);
 
   const showError = useCallback((msg) => {
     setToast(msg);
     clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 3500);
+    toastTimer.current = setTimeout(() => setToast(null), 6500);
   }, []);
-
-  /** Wrapper: run a server call, toast any player-facing error. */
-  const act = useCallback((event, payload) =>
-    call(event, payload).catch((e) => showError(e.message)), [showError]);
-
+  const act = useCallback((event, payload) => call(event, payload).catch((e) => showError(e.message)), [showError]);
   const refreshRooms = useCallback(() => {
     call('rooms:list').then((r) => setRoomsList(r.rooms || [])).catch(() => {});
   }, []);
 
-  useEffect(() => { roomStateRef.current = roomState; }, [roomState]);
+  const introduce = useCallback(async () => {
+    if (helloInFlight.current) return;
+    helloInFlight.current = true;
+    try {
+      const profile = getActiveProfile();
+      if (!profile) return;
+      setName(profile.name);
+      const res = await call('hello', getHelloPayload());
+      setSignedIn(true);
+      if (!res.rejoined) {
+        roomStateRef.current = null;
+        setRoomState(null);
+        setChat([]);
+        if (profile.currentRoomCode) {
+          clearCurrentRoom();
+          showError('Your player is back. That table is no longer available; choose another below.');
+        }
+      }
+      setProfiles(listProfiles());
+    } catch (error) { showError(error.message); }
+    finally { helloInFlight.current = false; }
+  }, [showError]);
 
+  useEffect(() => subscribeConnectionStatus(setHealth), []);
   useEffect(() => {
-    const onState = (s) => setRoomState(s);
-    const onClosed = ({ code, name }) => {
-      setRoomState(null);
-      setChat([]);
-      showError(`${name || code || 'That game'} was closed.`);
+    const onState = (state) => {
+      roomStateRef.current = state;
+      setRoomState(state);
+      try { rememberRoom(state); } catch (error) { showError(error.message); }
+    };
+    const onClosed = ({ code, name: roomName }) => {
+      try { forgetRoom(code); } catch (error) { showError(error.message); }
+      if (!roomStateRef.current || roomStateRef.current.room.code === code) {
+        roomStateRef.current = null;
+        setRoomState(null);
+        setChat([]);
+      }
+      showError(`${roomName || code || 'That game'} was closed.`);
       refreshRooms();
     };
-    const onChat = (m) => setChat((c) => [...c.slice(-100), m]);
-    const onHistory = (msgs) => setChat(msgs);
-    const onConnect = () => {
-      setConnected(true);
-      // (Re)introduce ourselves — the server reseats us if we were mid-game.
-      if (getSavedName()) {
-        call('hello', { token: getToken(), name: getSavedName() })
-          .then((res) => {
-            setSignedIn(true);
-            if (roomStateRef.current && !res.rejoined) {
-              setRoomState(null);
-              setChat([]);
-              showError('That game is no longer on the server. Start a fresh room.');
-              refreshRooms();
-            }
-          })
-          .catch(() => {});
-      }
+    const onChat = (message) => setChat((c) => [...c.slice(-100), message]);
+    const onHistory = (messages) => setChat(messages);
+    const onConnect = () => introduce();
+    const onReady = ({ state: serverState }) => {
+      if (serverState === 'ready' && !getConnectionStatus().sessionReady) introduce();
     };
-    const onDisconnect = () => setConnected(false);
     socket.on('room:state', onState);
     socket.on('room:closed', onClosed);
     socket.on('chat:message', onChat);
     socket.on('chat:history', onHistory);
     socket.on('connect', onConnect);
-    socket.on('disconnect', onDisconnect);
-    if (socket.connected) onConnect();
+    socket.on('server:status', onReady);
+    if (socket.connected) introduce();
     return () => {
       socket.off('room:state', onState);
       socket.off('room:closed', onClosed);
       socket.off('chat:message', onChat);
       socket.off('chat:history', onHistory);
       socket.off('connect', onConnect);
-      socket.off('disconnect', onDisconnect);
+      socket.off('server:status', onReady);
+      clearTimeout(toastTimer.current);
     };
-  }, [showError, refreshRooms]);
+  }, [introduce, showError, refreshRooms]);
 
   useEffect(() => {
-    if (signedIn && !roomState) {
+    if (signedIn && health.sessionReady && !roomState) {
       refreshRooms();
-      const t = setInterval(refreshRooms, 4000);
-      return () => clearInterval(t);
+      const timer = setInterval(refreshRooms, 4000);
+      return () => clearInterval(timer);
     }
-  }, [signedIn, roomState, refreshRooms]);
+  }, [signedIn, health.sessionReady, roomState, refreshRooms]);
 
-  const signIn = async (e) => {
-    e.preventDefault();
-    const n = name.trim();
-    if (!n) return;
-    saveName(n);
+  const signIn = async (event) => {
+    event.preventDefault();
+    if (!name.trim() || busy) return;
+    setBusy(true);
     try {
-      await call('hello', { token: getToken(), name: n });
-      setSignedIn(true);
-    } catch (err) { showError(err.message); }
+      createProfile(name.trim());
+      setProfiles(listProfiles());
+      await introduce();
+    } catch (error) { showError(error.message); }
+    finally { setBusy(false); }
   };
-
+  const recoverProfile = async (profile, roomCode) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      selectProfile(profile.token, roomCode ? { roomCode } : {});
+      await introduce();
+    } catch (error) { showError(error.message); }
+    finally { setBusy(false); }
+  };
   const leaveRoom = async () => {
-    await act('rooms:leave');
-    setRoomState(null);
-    setChat([]);
+    try {
+      await call('rooms:leave');
+      clearCurrentRoom();
+      roomStateRef.current = null;
+      setRoomState(null);
+      setChat([]);
+    } catch (error) { showError(error.message); }
   };
-
-  /** One click: room + three bots + deal. */
   const quickPlay = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
       await call('rooms:create', { roomName: `${name}'s quick game` });
       await call('room:addBot', { difficulty: 'easy' });
       await call('room:addBot', { difficulty: 'medium' });
       await call('room:addBot', { difficulty: 'hard' });
       await call('room:start');
-    } catch (e) { showError(e.message); }
+    } catch (error) { showError(error.message); }
+    finally { setBusy(false); }
   };
+  useEffect(() => {
+    window.render_game_to_text = () => JSON.stringify({
+      screen: !signedIn ? 'choose-player' : !roomState ? 'lobby' : roomState.room.started ? 'game' : 'waiting',
+      connection: { connected: health.connected, ready: health.sessionReady, saving: health.serverState },
+      playerName: name,
+      room: roomState ? { name: roomState.room.name, code: roomState.room.code, role: roomState.role } : null,
+      game: roomState?.game ? {
+        phase: roomState.game.phase, round: roomState.game.round, contract: roomState.game.contract?.label,
+        turnPhase: roomState.game.turnPhase,
+        currentPlayer: roomState.game.players.find((player) => player.id === roomState.game.currentPlayerId)?.name,
+        players: roomState.game.players.map((player) => ({ name: player.name, score: player.score, handCount: player.handCount, connected: player.connected, hasGoneDown: player.hasGoneDown })),
+        yourHand: roomState.game.players.find((player) => player.id === roomState.you)?.hand?.map((card) => ({ rank: card.rank, suit: card.suit, joker: Boolean(card.joker) })),
+        discard: roomState.game.discardTop ? { rank: roomState.game.discardTop.rank, suit: roomState.game.discardTop.suit, joker: Boolean(roomState.game.discardTop.joker) } : null,
+        lastEvent: roomState.game.lastEvent,
+      } : null,
+    });
+    return () => { delete window.render_game_to_text; };
+  }, [signedIn, roomState, name, health]);
+  const blocked = signedIn && (!health.connected || !health.sessionReady || health.serverState === 'paused');
+  const statusMessage = !health.connected ? 'Reconnecting to the table… Your last saved game will return.'
+    : health.recovering ? 'Finding your player and saved table…'
+      : health.serverState === 'paused' ? health.message || 'Saving is unavailable. Play is paused while we reconnect.'
+        : null;
 
   return (
-    <div className="min-h-screen text-emerald-50">
-      {!connected && (
-        <div className="fixed top-0 inset-x-0 bg-red-700 text-white text-center text-sm py-1 z-50">
-          Connection lost — reconnecting…
-        </div>
-      )}
-      {toast && (
-        <div className="fixed top-8 left-1/2 -translate-x-1/2 bg-amber-500 text-black font-semibold px-4 py-2 rounded-lg shadow-lg z-50">
-          {toast}
-        </div>
-      )}
-
-      {!signedIn ? (
-        <NameScreen name={name} setName={setName} onSubmit={signIn} />
-      ) : !roomState ? (
-        <LobbyScreen
-          name={name}
-          rooms={roomsList}
-          onCreate={(roomName) => act('rooms:create', { roomName })}
-          onJoin={(code, spectate) => act('rooms:join', { code, spectate })}
-          onCloseRoom={(code) => act('room:close', { code }).then(refreshRooms)}
-          onRefresh={refreshRooms}
-          onQuickPlay={quickPlay}
-        />
-      ) : (
-        <GameScreen state={roomState} chat={chat} act={act} onLeave={leaveRoom} />
-      )}
-    </div>
-  );
-}
-
-/** Carved-sign logo with a plain-text fallback if the art is missing. */
-function Logo({ className }) {
-  const [broken, setBroken] = useState(false);
-  if (broken) return <h1 className={`text-5xl font-black tracking-tight drop-shadow-md ${className}`}>☘️ Irish Rummy</h1>;
-  return <img src={artUrl('logo.png')} alt="Irish Rummy" draggable={false} onError={() => setBroken(true)} className={className} />;
-}
-
-/* ---------------- sign-in ---------------- */
-function NameScreen({ name, setName, onSubmit }) {
-  return (
-    <div className="flex flex-col items-center justify-center min-h-screen gap-6 px-4">
-      <div className="text-center">
-        <Logo className="w-[26rem] max-w-[88vw] mx-auto drop-shadow-2xl" />
+    <div className="app-shell">
+      {statusMessage && <div className="connection-banner" role="status">{statusMessage}</div>}
+      {toast && <div className="toast" role="alert"><span>{toast}</span><button onClick={() => setToast(null)} aria-label="Dismiss message">×</button></div>}
+      <div className={blocked ? 'sync-lock' : undefined} aria-busy={blocked || busy}>
+        {!signedIn ? (
+          <NameScreen name={name} setName={setName} onSubmit={signIn} profiles={profiles} onRecover={recoverProfile} busy={busy || health.recovering} connected={health.connected} storageError={initial.error} />
+        ) : !roomState ? (
+          <LobbyScreen name={name} rooms={roomsList} busy={busy}
+            onCreate={(roomName) => act('rooms:create', { roomName })}
+            onJoin={(code, spectate) => act('rooms:join', { code, spectate })}
+            onCloseRoom={(code) => act('room:close', { code }).then(refreshRooms)}
+            onRefresh={refreshRooms} onQuickPlay={quickPlay} />
+        ) : <GameScreen state={roomState} chat={chat} act={act} onLeave={leaveRoom} />}
       </div>
-      <form onSubmit={onSubmit} className="flex flex-col gap-3 w-full max-w-xs">
-        <input
-          className="rounded-lg px-4 py-3 text-black bg-emerald-50 text-center text-lg font-semibold outline-none focus:ring-4 ring-amber-400"
-          placeholder="Your name"
-          maxLength={20}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          autoFocus
-        />
-        <button className="bg-amber-400 hover:bg-amber-300 text-black font-bold rounded-lg py-3 text-lg shadow-lg">
-          Play
-        </button>
-      </form>
     </div>
   );
 }
 
-/* ---------------- lobby ---------------- */
-function LobbyScreen({ name, rooms, onCreate, onJoin, onCloseRoom, onRefresh, onQuickPlay }) {
+export function Brand({ compact = false }) {
+  return <span className={`brand ${compact ? 'brand-compact' : ''}`}>Irish Rummy<span className="brand-period">.</span></span>;
+}
+
+function WelcomeFrame({ children, signIn = false }) {
+  const [showRules, setShowRules] = useState(false);
+  return (
+    <main className={`welcome-shell ${signIn ? 'sign-in-shell' : ''}`}>
+      <header className="welcome-header"><Brand /><button className="text-button" onClick={() => setShowRules(true)}>How to play</button></header>
+      <div className="welcome-grid">
+        <div className="lake-illustration"><img src={artUrl('lake-house-v2.png')} alt="Two chairs waiting on a sunlit dock beside the family lake house" fetchPriority="high" /></div>
+        <div className="welcome-content">{children}</div>
+      </div>
+      {showRules && <RuleBook onClose={() => setShowRules(false)} />}
+    </main>
+  );
+}
+
+function NameScreen({ name, setName, onSubmit, profiles, onRecover, busy, connected, storageError }) {
+  return (
+    <WelcomeFrame signIn>
+      <div className="welcome-intro"><h1>Welcome to <br />the lake.</h1><p>Pull up a chair. Aunt Peggy's game is better together.</p></div>
+      {profiles.length > 0 && <section className="saved-players" aria-label="Saved players">
+        <h2>Pick up where you left off.</h2>
+        {profiles.map((profile) => <div className="saved-player" key={profile.token}>
+          <button className="profile-button" disabled={busy || !connected} onClick={() => onRecover(profile)}>
+            <span className="profile-initial" aria-hidden="true">{(profile.name || '?').slice(0, 1)}</span>
+            <span><strong>Continue as {profile.name || 'saved player'}</strong><small>{profile.currentRoomCode ? `Return to table ${profile.currentRoomCode}` : 'Your saved player'}</small></span><span className="profile-arrow" aria-hidden="true">↗</span>
+          </button>
+          {profile.rooms.length > 1 && <details className="saved-tables"><summary>Other saved tables</summary>{profile.rooms.filter((r) => r.code !== profile.currentRoomCode).map((r) => <button className="text-button" key={r.code} disabled={busy || !connected} onClick={() => onRecover(profile, r.code)}>{r.name} · {r.code}</button>)}</details>}
+        </div>)}
+      </section>}
+      <form onSubmit={onSubmit} className="name-form">
+        <label htmlFor="player-name">{profiles.length ? 'Or start as someone new' : 'Your name'}</label>
+        <input id="player-name" placeholder="e.g. John" maxLength={20} value={name} onChange={(e) => setName(e.target.value)} autoComplete="given-name" autoFocus={!profiles.length} disabled={busy || !!storageError} />
+        <button className="primary-button" disabled={busy || !connected || !name.trim() || !!storageError}>{busy ? 'Finding your seat…' : 'Take a seat'}</button>
+        <p className="form-note">Your player is remembered on this browser.</p>
+      </form>
+    </WelcomeFrame>
+  );
+}
+
+function LobbyScreen({ name, rooms, onCreate, onJoin, onCloseRoom, onRefresh, onQuickPlay, busy }) {
   const [roomName, setRoomName] = useState('');
   const [joinCode, setJoinCode] = useState('');
   return (
-    <div className="max-w-2xl mx-auto px-4 py-10 flex flex-col gap-8">
-      <header className="text-center">
-        <Logo className="w-64 max-w-[70vw] mx-auto drop-shadow-xl" />
-        <p className="text-emerald-200/80 mt-2">Welcome, {name}.</p>
-      </header>
-
-      <button
-        onClick={onQuickPlay}
-        className="bg-amber-400 hover:bg-amber-300 text-black font-black rounded-2xl px-6 py-4 text-lg shadow-xl hover:scale-[1.02] transition-transform"
-      >
-        🎮 Quick play vs bots
-        <span className="block text-xs font-semibold text-black/60">instantly deals you in against Pippin, Tom Bombadil and Saruman</span>
-      </button>
-
-      <section className="felt-panel rounded-2xl p-5 flex flex-col gap-3">
-        <h2 className="font-bold text-lg">Start a game with friends</h2>
-        <div className="flex gap-2">
-          <input
-            className="flex-1 rounded-lg px-3 py-2 text-black bg-emerald-50 outline-none"
-            placeholder={`${name}'s game`}
-            maxLength={30}
-            value={roomName}
-            onChange={(e) => setRoomName(e.target.value)}
-          />
-          <button
-            onClick={() => onCreate(roomName)}
-            className="bg-amber-400 hover:bg-amber-300 text-black font-bold rounded-lg px-5"
-          >
-            Create
-          </button>
-        </div>
-        <p className="text-sm text-emerald-200/70">
-          Play solo by adding bots, or share the room code with friends and family.
-        </p>
+    <WelcomeFrame>
+      <div className="welcome-intro"><h1>A seat for everyone.</h1><p>Welcome back, {name}. Gather the family or deal a practice hand.</p></div>
+      <section className="lobby-section">
+        <h2>Start a family game</h2>
+        <form className="inline-form" onSubmit={(e) => { e.preventDefault(); onCreate(roomName); }}>
+          <input aria-label="New game name" placeholder={`${name}'s game`} maxLength={30} value={roomName} onChange={(e) => setRoomName(e.target.value)} />
+          <button className="primary-button" disabled={busy}>Create game</button>
+        </form>
       </section>
-
-      <section className="felt-panel rounded-2xl p-5 flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <h2 className="font-bold text-lg">Join a game</h2>
-          <button onClick={onRefresh} className="text-sm text-amber-300 hover:text-amber-200">↻ refresh</button>
-        </div>
-        <div className="flex gap-2">
-          <input
-            className="w-36 rounded-lg px-3 py-2 text-black bg-emerald-50 outline-none uppercase tracking-widest"
-            placeholder="CODE"
-            maxLength={5}
-            value={joinCode}
-            onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-          />
-          <button onClick={() => joinCode && onJoin(joinCode, false)} className="bg-emerald-500 hover:bg-emerald-400 text-black font-bold rounded-lg px-4">Join</button>
-          <button onClick={() => joinCode && onJoin(joinCode, true)} className="bg-emerald-800 hover:bg-emerald-700 rounded-lg px-4">Spectate</button>
-        </div>
-        {rooms.length === 0 ? (
-          <p className="text-sm text-emerald-200/60">No open games right now.</p>
-        ) : (
-          <ul className="divide-y divide-emerald-900/60">
-            {rooms.map((r) => (
-              <li key={r.code} className="py-2 flex items-center justify-between gap-2">
-                <div>
-                  <span className="font-semibold">{r.name}</span>{' '}
-                  <span className="text-xs bg-emerald-900/70 rounded px-1.5 py-0.5 tracking-widest">{r.code}</span>
-                  <div className="text-xs text-emerald-200/70">
-                    {r.players.join(', ')} {r.started ? `— round ${r.round}` : '— waiting'}
-                    {r.spectators > 0 && ` — ${r.spectators} watching`}
-                  </div>
-                </div>
-                <div className="flex gap-2 shrink-0">
-                  {(!r.started || r.canRejoin) && (
-                    <button onClick={() => onJoin(r.code, false)} className="bg-emerald-500 hover:bg-emerald-400 text-black text-sm font-bold rounded px-3 py-1">
-                      {r.started ? 'Rejoin' : 'Join'}
-                    </button>
-                  )}
-                  <button onClick={() => onJoin(r.code, true)} className="bg-emerald-800 hover:bg-emerald-700 text-sm rounded px-3 py-1">Watch</button>
-                  {r.canClose && (
-                    <button
-                      onClick={() => window.confirm(`Close ${r.name}? Everyone will be returned to the lobby.`) && onCloseRoom(r.code)}
-                      className="bg-red-700 hover:bg-red-600 text-sm rounded px-3 py-1"
-                    >
-                      Close
-                    </button>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+      <section className="lobby-section">
+        <h2>Have a room code?</h2>
+        <form className="inline-form" onSubmit={(e) => { e.preventDefault(); if (joinCode.trim()) onJoin(joinCode, false); }}>
+          <input aria-label="Room code" className="code-input" placeholder="ABCDE" maxLength={5} autoCapitalize="characters" autoComplete="off" value={joinCode} onChange={(e) => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} />
+          <button className="primary-button" disabled={!joinCode.trim() || busy}>Join game</button>
+        </form>
+        <button className="text-button brass-link" disabled={!joinCode.trim() || busy} onClick={() => onJoin(joinCode, true)}>Watch instead</button>
       </section>
-    </div>
+      <section className="lobby-section tables-section">
+        <div className="section-heading"><h2>Your tables</h2><button onClick={onRefresh} className="text-button refresh-button" aria-label="Refresh games">Refresh</button></div>
+        {rooms.length === 0 ? <p className="empty-tables">The table is ready. Start a game and invite the family.</p> : <ul className="room-list">{rooms.map((room) => <li key={room.code}>
+          <div className="room-summary"><h3>{room.name}</h3><p>{room.started ? `Round ${room.round}` : 'Gathering players'} · {room.players.join(', ') || 'Open seats'}{room.spectators > 0 ? ` · ${room.spectators} watching` : ''}</p><span className="room-code-label">{room.code}</span></div>
+          <div className="room-actions">
+            {(!room.started || room.canRejoin) && <button onClick={() => onJoin(room.code, false)} className="outline-button">{room.started ? 'Rejoin' : 'Join'}</button>}
+            <button onClick={() => onJoin(room.code, true)} className="text-button">Watch</button>
+            {room.canClose && <button onClick={() => window.confirm(`Close ${room.name}? Everyone will be returned to the lobby.`) && onCloseRoom(room.code)} className="text-button danger-link">Close</button>}
+          </div>
+        </li>)}</ul>}
+      </section>
+      <button onClick={onQuickPlay} className="text-button brass-link practice-link" disabled={busy}>Practice with bots <span aria-hidden="true">↗</span></button>
+    </WelcomeFrame>
   );
 }
